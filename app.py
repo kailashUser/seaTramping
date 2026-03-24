@@ -1895,8 +1895,28 @@ with tabs[4]:
                 prev_lbl = (
                     f"from {_prev_port}" if sel_idx > 0 else "first voyage"
                 )
-                spd_l = vessel.speed_laden_knots   if vessel else 11.0
-                spd_b = vessel.speed_ballast_knots if vessel else 11.5
+                # Default speeds from vessel config
+                _spd_l_default = vessel.speed_laden_knots   if vessel else 11.0
+                _spd_b_default = vessel.speed_ballast_knots if vessel else 11.5
+
+                # Speed inputs — editable per voyage
+                spd_col1, spd_col2 = st.columns(2)
+                with spd_col1:
+                    spd_l = st.number_input(
+                        "Laden speed (kn)",
+                        value=float(_spd_l_default),
+                        min_value=6.0, max_value=18.0, step=0.5,
+                        key=f'va_spdl_{sel_prog_idx}_{sel_idx}',
+                        help="Vessel speed when loaded"
+                    )
+                with spd_col2:
+                    spd_b = st.number_input(
+                        "Ballast speed (kn)",
+                        value=float(_spd_b_default),
+                        min_value=6.0, max_value=18.0, step=0.5,
+                        key=f'va_spdb_{sel_prog_idx}_{sel_idx}',
+                        help="Vessel speed when empty"
+                    )
 
                 laden_nm = st.number_input(
                     f"Laden NM (auto: {auto_laden:,})",
@@ -1905,7 +1925,7 @@ with tabs[4]:
                     key=f'va_lnm_{sel_prog_idx}_{sel_idx}_{new_load}_{new_disch}',
                     help="Auto-calculated from port coordinates. Override if needed."
                 )
-                laden_days = laden_nm / (spd_l * 24)
+                laden_days = laden_nm / (spd_l * 24) if spd_l > 0 else 0
                 st.caption(f"@ {spd_l} kn → **{laden_days:.2f} days**")
 
                 ballast_nm = st.number_input(
@@ -1915,7 +1935,8 @@ with tabs[4]:
                     key=f'va_bnm_{sel_prog_idx}_{sel_idx}_{_prev_port}_{new_load}',
                 )
                 ballast_days = (
-                    ballast_nm / (spd_b * 24) if ballast_nm > 0 else 0
+                    ballast_nm / (spd_b * 24)
+                    if ballast_nm > 0 and spd_b > 0 else 0
                 )
                 st.caption(f"@ {spd_b} kn → **{ballast_days:.2f} days**")
 
@@ -1989,6 +2010,18 @@ with tabs[4]:
                     )
                     lm_va  = _get_meta(new_load)
                     dm_va  = _get_meta(new_disch)
+                    vessel_override = VesselConfig(
+                        dwt=vessel.dwt,
+                        dwcc=vessel.dwcc,
+                        speed_laden_knots=spd_l,
+                        speed_ballast_knots=spd_b,
+                        charter_hire_day=vessel.charter_hire_day,
+                        lsfo_price_mt=vessel.lsfo_price_mt,
+                        mgo_price_mt=vessel.mgo_price_mt,
+                        insurance_annual=vessel.insurance_annual,
+                        brokerage_pct=vessel.brokerage_pct,
+                        operating_days_year=vessel.operating_days_year,
+                    )
                     computed_va = cost_voyage_exact(
                         cargo_mt=new_cargo,
                         freight_rate=new_rate,
@@ -2000,7 +2033,7 @@ with tabs[4]:
                         load_port_steve=0,
                         disch_port_nav=dm_va['nav'],
                         disch_port_steve=0,
-                        vessel=vessel,
+                        vessel=vessel_override,
                         load_cong_days=lm_va['cong'],
                         disch_cong_days=dm_va['cong'],
                     )
