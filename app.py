@@ -1864,14 +1864,30 @@ with tabs[4]:
                            if cur_comm in all_comm else 0),
                     key=f'va_comm_{sel_prog_idx}_{sel_idx}',
                 )
-                load_meta  = _get_meta(new_load)
-                disch_meta = _get_meta(new_disch)
+                _sim_load_c  = sel_leg.get('origin_port', '')
+                _sim_disch_c = sel_leg.get('dest_port', '')
+                _ports_changed_c = (new_load != _sim_load_c
+                                    or new_disch != _sim_disch_c)
+                if _ports_changed_c:
+                    load_meta  = _get_meta(new_load)
+                    disch_meta = _get_meta(new_disch)
+                    _lnav  = load_meta['nav']
+                    _dnav  = disch_meta['nav']
+                    _lcong = load_meta['cong']
+                    _dcong = disch_meta['cong']
+                else:
+                    _lnav  = int(sel_leg.get('load_port_nav',  10000))
+                    _dnav  = int(sel_leg.get('disch_port_nav', 10000))
+                    _lcong = float(sel_leg.get('load_cong_days',  1.0))
+                    _dcong = float(sel_leg.get('disch_cong_days', 1.0))
                 st.markdown(
                     f"<div style='font-size:10px;color:#64748b;margin-top:4px'>"
-                    f"Load nav: <b>${load_meta['nav']:,}</b> · "
-                    f"Cong: <b>{load_meta['cong']:.1f}d</b><br>"
-                    f"Disch nav: <b>${disch_meta['nav']:,}</b> · "
-                    f"Cong: <b>{disch_meta['cong']:.1f}d</b>"
+                    f"Load nav: <b>${_lnav:,}</b> · "
+                    f"Cong: <b>{_lcong:.1f}d</b><br>"
+                    f"Disch nav: <b>${_dnav:,}</b> · "
+                    f"Cong: <b>{_dcong:.1f}d</b>"
+                    f"<span style='font-size:9px;color:#94a3b8;margin-left:4px'>"
+                    f"{'(calc)' if _ports_changed_c else '(sim)'}</span>"
                     f"</div>",
                     unsafe_allow_html=True
                 )
@@ -1884,14 +1900,38 @@ with tabs[4]:
                     "margin-bottom:6px'>Distances &amp; days</div>",
                     unsafe_allow_html=True
                 )
-                auto_laden = _calc_nm(new_load, new_disch)
+                # Check if ports changed from simulation values
+                _sim_load  = sel_leg.get('origin_port', '')
+                _sim_disch = sel_leg.get('dest_port', '')
+                _ports_changed = (new_load != _sim_load or new_disch != _sim_disch)
+
                 _prev_port = (
                     legs_list[sel_idx-1].get('dest_port', 'prev')
                     if sel_idx > 0 else 'start'
                 )
-                auto_ballast = (
-                    _calc_nm(_prev_port, new_load) if sel_idx > 0 else 0
+                _sim_prev = (
+                    legs_list[sel_idx-1].get('dest_port', '')
+                    if sel_idx > 0 else ''
                 )
+                _ballast_changed = (new_load != _sim_load or _prev_port != _sim_prev)
+
+                # Use simulation NM if ports unchanged, else calculate from coords
+                if _ports_changed:
+                    _default_laden = float(_calc_nm(new_load, new_disch))
+                    _laden_label   = f"Laden NM (calc: {_default_laden:,.0f})"
+                else:
+                    _default_laden = float(sel_leg.get(
+                        'laden_nm', _calc_nm(new_load, new_disch)
+                    ))
+                    _laden_label   = f"Laden NM (sim: {_default_laden:,.0f})"
+
+                if _ballast_changed:
+                    _default_ballast = float(
+                        _calc_nm(_prev_port, new_load) if sel_idx > 0 else 0
+                    )
+                else:
+                    _default_ballast = float(sel_leg.get('ballast_nm', 0))
+
                 prev_lbl = (
                     f"from {_prev_port}" if sel_idx > 0 else "first voyage"
                 )
@@ -1919,18 +1959,23 @@ with tabs[4]:
                     )
 
                 laden_nm = st.number_input(
-                    f"Laden NM (auto: {auto_laden:,})",
-                    value=float(auto_laden),
+                    _laden_label,
+                    value=_default_laden,
                     min_value=0.0, step=10.0,
                     key=f'va_lnm_{sel_prog_idx}_{sel_idx}_{new_load}_{new_disch}',
-                    help="Auto-calculated from port coordinates. Override if needed."
+                    help=(
+                        "Loaded from simulation data (D1 matrix). "
+                        "Changes automatically when you select a different port."
+                        if not _ports_changed else
+                        "Calculated from port coordinates. Override if needed."
+                    )
                 )
                 laden_days = laden_nm / (spd_l * 24) if spd_l > 0 else 0
                 st.caption(f"@ {spd_l} kn → **{laden_days:.2f} days**")
 
                 ballast_nm = st.number_input(
                     f"Ballast NM ({prev_lbl})",
-                    value=float(auto_ballast),
+                    value=_default_ballast,
                     min_value=0.0, step=10.0,
                     key=f'va_bnm_{sel_prog_idx}_{sel_idx}_{_prev_port}_{new_load}',
                 )
@@ -2008,8 +2053,21 @@ with tabs[4]:
                     rates_va = CARGO_RATE.get(
                         cat_va, {'load': 5000, 'disch': 4000}
                     )
-                    lm_va  = _get_meta(new_load)
-                    dm_va  = _get_meta(new_disch)
+
+                    # Port charges: simulation values when ports unchanged
+                    if _ports_changed:
+                        lm_va = _get_meta(new_load)
+                        dm_va = _get_meta(new_disch)
+                        _load_nav   = lm_va['nav']
+                        _disch_nav  = dm_va['nav']
+                        _load_cong  = lm_va['cong']
+                        _disch_cong = dm_va['cong']
+                    else:
+                        _load_nav   = float(sel_leg.get('load_port_nav',  10000))
+                        _disch_nav  = float(sel_leg.get('disch_port_nav', 10000))
+                        _load_cong  = float(sel_leg.get('load_cong_days',  1.0))
+                        _disch_cong = float(sel_leg.get('disch_cong_days', 1.0))
+
                     vessel_override = VesselConfig(
                         dwt=vessel.dwt,
                         dwcc=vessel.dwcc,
@@ -2029,13 +2087,13 @@ with tabs[4]:
                         ballast_nm=ballast_nm,
                         load_rate_mt_day=rates_va['load'],
                         disch_rate_mt_day=rates_va['disch'],
-                        load_port_nav=lm_va['nav'],
+                        load_port_nav=_load_nav,
                         load_port_steve=0,
-                        disch_port_nav=dm_va['nav'],
+                        disch_port_nav=_disch_nav,
                         disch_port_steve=0,
                         vessel=vessel_override,
-                        load_cong_days=lm_va['cong'],
-                        disch_cong_days=dm_va['cong'],
+                        load_cong_days=_load_cong,
+                        disch_cong_days=_disch_cong,
                     )
                 except Exception:
                     computed_va = None
