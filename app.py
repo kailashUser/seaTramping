@@ -2246,14 +2246,14 @@ with tabs[4]:
                     f"margin-top:4px'>"
                     f"<span style='font-size:10px;background:#e6f1fb;"
                     f"color:#0c447c;padding:2px 8px;border-radius:10px'>"
-                    f"Load nav: ${load_meta['nav']:,}</span>"
+                    f"Load nav: ${_lnav:,}</span>"
                     f"<span style='font-size:10px;background:#e6f1fb;"
                     f"color:#0c447c;padding:2px 8px;border-radius:10px'>"
-                    f"Disch nav: ${disch_meta['nav']:,}</span>"
+                    f"Disch nav: ${_dnav:,}</span>"
                     f"<span style='font-size:10px;background:#fef3c7;"
                     f"color:#92400e;padding:2px 8px;border-radius:10px'>"
                     f"Cong: "
-                    f"{load_meta['cong']+disch_meta['cong']:.1f}d</span>"
+                    f"{_lcong+_dcong:.1f}d</span>"
                     f"</div>",
                     unsafe_allow_html=True
                 )
