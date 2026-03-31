@@ -73,6 +73,19 @@ class SimConfig:
     n_workers: int = 1
     top_n_programmes: int = 100
     local_search_passes: int = 2       # 2-opt improvement passes per greedy solution
+    random_seed: int | None = None
+    # Distribution type
+    dist_type: str = 'normal'        # 'normal' or 'triangular'
+    # Triangular bounds (multipliers on base value, 1.0 = base)
+    freight_min:  float = 0.70
+    freight_mode: float = 1.00
+    freight_max:  float = 1.40
+    bunker_min:   float = 0.75
+    bunker_mode:  float = 1.00
+    bunker_max:   float = 1.60
+    cong_min:     float = 0.40
+    cong_mode:    float = 1.00
+    cong_max:     float = 2.00
 
 
 # ─── VOYAGE DATA STRUCTURES ──────────────────────────────────────────────────
@@ -565,6 +578,21 @@ def find_communities(G) -> Dict[str, int]:
         return {}
 
 
+def _sample_mult(rng, dist_type, vol,
+                 tri_min=0.70, tri_mode=1.00, tri_max=1.40,
+                 size=None, clip_lo=0.5, clip_hi=2.0):
+    """Sample stochastic multiplier — Normal or Triangular."""
+    if dist_type == 'triangular':
+        if size is not None:
+            return rng.triangular(tri_min, tri_mode, tri_max, size=size)
+        return float(rng.triangular(tri_min, tri_mode, tri_max))
+    else:
+        if size is not None:
+            return np.clip(1.0 + rng.normal(0.0, vol, size=size),
+                           clip_lo, clip_hi)
+        return float(np.clip(1.0 + rng.normal(0.0, vol), clip_lo, clip_hi))
+
+
 # ─── GREEDY CONSTRUCTIVE HEURISTIC ───────────────────────────────────────────
 
 def greedy_programme(
@@ -600,8 +628,19 @@ def greedy_programme(
     remaining_days = float(vessel.operating_days_year)
 
     # Iteration-level stochastic multipliers (fixed per programme)
-    pc_mult   = max(0.5, 1.0 + rng.normal(0.0, port_charge_vol))
-    cong_mult = max(0.1, 1.0 + rng.normal(0.0, congestion_vol))
+    _dt = getattr(sim_config, 'dist_type', 'normal')
+    pc_mult = float(_sample_mult(
+        rng, _dt, port_charge_vol,
+        tri_min=0.70, tri_mode=1.00, tri_max=1.40,
+        clip_lo=0.5, clip_hi=2.0
+    ))
+    cong_mult = float(_sample_mult(
+        rng, _dt, congestion_vol,
+        tri_min=getattr(sim_config, 'cong_min',  0.40),
+        tri_mode=getattr(sim_config, 'cong_mode', 1.00),
+        tri_max=getattr(sim_config, 'cong_max',  2.00),
+        clip_lo=0.1, clip_hi=4.0
+    ))
 
     for _ in range(60):  # max 60 voyages per year
         if remaining_days < 8.0:
@@ -635,8 +674,13 @@ def greedy_programme(
             cand_ballast = cand_ballast[sel]
 
         # Stochastic freight multipliers
-        freight_mult = 1.0 + rng.normal(0.0, freight_vol, len(cand_indices))
-        freight_mult = np.clip(freight_mult, 0.5, 2.0)
+        freight_mult = _sample_mult(
+            rng, _dt, freight_vol,
+            tri_min=getattr(sim_config, 'freight_min',  0.70),
+            tri_mode=getattr(sim_config, 'freight_mode', 1.00),
+            tri_max=getattr(sim_config, 'freight_max',  1.40),
+            size=len(cand_indices), clip_lo=0.5, clip_hi=2.0
+        )
 
         ppd = fast_lib.evaluate_candidates(
             cand_indices, cand_ballast, lsfo_price, mgo_price, freight_mult,
@@ -994,10 +1038,14 @@ def run_full_simulation(
         temperatures = np.linspace(1.5, 0.3, n_greedy)
 
         for i in range(n_greedy):
-            lsfo = lsfo_base * (1.0 + rng.normal(0, sim_config.bunker_volatility * 0.5))
-            lsfo = max(lsfo, lsfo_base * 0.7)
-            mgo  = mgo_base  * (1.0 + rng.normal(0, sim_config.bunker_volatility * 0.5))
-            mgo  = max(mgo, mgo_base * 0.7)
+            lsfo, mgo = _stochastic_prices(
+                rng, lsfo_base, mgo_base,
+                sim_config.bunker_volatility,
+                dist_type=sim_config.dist_type,
+                b_min=sim_config.bunker_min,
+                b_mode=sim_config.bunker_mode,
+                b_max=sim_config.bunker_max,
+            )
 
             start = None
             if top_start_ids and i % 3 != 0:
@@ -1031,7 +1079,14 @@ def run_full_simulation(
         progress_callback("Phase 1: Pure Exploration", n_greedy, total)
 
     for i in range(n_explore):
-        lsfo, mgo = _stochastic_prices(rng, lsfo_base, mgo_base, sim_config.bunker_volatility)
+        lsfo, mgo = _stochastic_prices(
+            rng, lsfo_base, mgo_base,
+            sim_config.bunker_volatility,
+            dist_type=sim_config.dist_type,
+            b_min=sim_config.bunker_min,
+            b_mode=sim_config.bunker_mode,
+            b_max=sim_config.bunker_max,
+        )
         prog = _mc_programme(fast_lib, dist_matrix, vessel, rng,
                              sim_config.temperature_explore, port_weights,
                              sim_config.freight_volatility, lsfo, mgo,
@@ -1050,7 +1105,14 @@ def run_full_simulation(
         progress_callback("Phase 2: Informed Exploration", n_greedy + n_explore, total)
 
     for i in range(n_informed):
-        lsfo, mgo = _stochastic_prices(rng, lsfo_base, mgo_base, sim_config.bunker_volatility)
+        lsfo, mgo = _stochastic_prices(
+            rng, lsfo_base, mgo_base,
+            sim_config.bunker_volatility,
+            dist_type=sim_config.dist_type,
+            b_min=sim_config.bunker_min,
+            b_mode=sim_config.bunker_mode,
+            b_max=sim_config.bunker_max,
+        )
         prog = _mc_programme(fast_lib, dist_matrix, vessel, rng,
                              sim_config.temperature_informed, port_weights,
                              sim_config.freight_volatility, lsfo, mgo,
@@ -1069,7 +1131,14 @@ def run_full_simulation(
         progress_callback("Phase 3: Intensive Exploitation", n_greedy + n_explore + n_informed, total)
 
     for i in range(n_exploit):
-        lsfo, mgo = _stochastic_prices(rng, lsfo_base, mgo_base, sim_config.bunker_volatility)
+        lsfo, mgo = _stochastic_prices(
+            rng, lsfo_base, mgo_base,
+            sim_config.bunker_volatility,
+            dist_type=sim_config.dist_type,
+            b_min=sim_config.bunker_min,
+            b_mode=sim_config.bunker_mode,
+            b_max=sim_config.bunker_max,
+        )
         prog = _mc_programme(fast_lib, dist_matrix, vessel, rng,
                              sim_config.temperature_exploit, port_weights,
                              sim_config.freight_volatility, lsfo, mgo,
@@ -1087,9 +1156,15 @@ def run_full_simulation(
     return all_results
 
 
-def _stochastic_prices(rng, lsfo_base, mgo_base, vol):
-    lsfo = lsfo_base * max(0.7, 1.0 + rng.normal(0, vol * 0.5))
-    mgo  = mgo_base  * max(0.7, 1.0 + rng.normal(0, vol * 0.5))
+def _stochastic_prices(rng, lsfo_base, mgo_base, vol,
+                       dist_type='normal',
+                       b_min=0.75, b_mode=1.00, b_max=1.60):
+    if dist_type == 'triangular':
+        lsfo = lsfo_base * float(rng.triangular(b_min, b_mode, b_max))
+        mgo  = mgo_base  * float(rng.triangular(b_min, b_mode, b_max))
+    else:
+        lsfo = lsfo_base * max(0.7, 1.0 + rng.normal(0, vol * 0.5))
+        mgo  = mgo_base  * max(0.7, 1.0 + rng.normal(0, vol * 0.5))
     return lsfo, mgo
 
 
@@ -1119,8 +1194,19 @@ def _mc_programme(
     remaining_days = float(vessel.operating_days_year)
 
     # Iteration-level stochastic multipliers (fixed per programme for consistency)
-    pc_mult   = max(0.5, 1.0 + rng.normal(0.0, port_charge_vol))
-    cong_mult = max(0.1, 1.0 + rng.normal(0.0, congestion_vol))
+    _dt_mc = getattr(sim_config, 'dist_type', 'normal')
+    pc_mult = float(_sample_mult(
+        rng, _dt_mc, port_charge_vol,
+        tri_min=0.70, tri_mode=1.00, tri_max=1.40,
+        clip_lo=0.5, clip_hi=2.0
+    ))
+    cong_mult = float(_sample_mult(
+        rng, _dt_mc, congestion_vol,
+        tri_min=getattr(sim_config, 'cong_min',  0.40),
+        tri_mode=getattr(sim_config, 'cong_mode', 1.00),
+        tri_max=getattr(sim_config, 'cong_max',  2.00),
+        clip_lo=0.1, clip_hi=4.0
+    ))
 
     for _ in range(60):
         if remaining_days < 8.0:
@@ -1149,7 +1235,13 @@ def _mc_programme(
             cand_indices = cand_indices[sel]
             cand_ballast = cand_ballast[sel]
 
-        freight_mult = np.clip(1.0 + rng.normal(0.0, freight_vol, len(cand_indices)), 0.5, 2.0)
+        freight_mult = _sample_mult(
+            rng, _dt_mc, freight_vol,
+            tri_min=getattr(sim_config, 'freight_min',  0.70),
+            tri_mode=getattr(sim_config, 'freight_mode', 1.00),
+            tri_max=getattr(sim_config, 'freight_max',  1.40),
+            size=len(cand_indices), clip_lo=0.5, clip_hi=2.0
+        )
         ppd = fast_lib.evaluate_candidates(
             cand_indices, cand_ballast, lsfo_price, mgo_price, freight_mult,
             port_charge_mult=pc_mult, cong_mult=cong_mult,
@@ -1217,24 +1309,51 @@ def analyse_results(results, ports_df):
     df = pd.DataFrame([{k: v for k, v in r.items() if k != 'legs'} for r in results])
     analysis = {}
 
+    import math as _math_stats
+
+    _n       = len(df)
+    _mean    = df['total_profit'].mean()
+    _std     = df['total_profit'].std()
+    _stderr  = _std / _math_stats.sqrt(_n) if _n > 1 else 0.0
+    _loss_p  = (df['total_profit'] < 0).mean()   # proportion loss
+
+    # z-values for confidence intervals
+    _z95 = 1.959963985   # NORMSINV(0.975)
+    _z90 = 1.644853627   # NORMSINV(0.95)
+
     analysis['summary'] = {
-        'total_iterations': len(df),
-        'mean_profit': df['total_profit'].mean(),
+        'total_iterations': _n,
+        # Central tendency
+        'mean_profit':   _mean,
         'median_profit': df['total_profit'].median(),
-        'std_profit': df['total_profit'].std(),
+        'std_profit':    _std,
+        'stderr_profit': _stderr,
+        # Percentiles
+        'p5_profit':  df['total_profit'].quantile(0.05),  # VaR level
         'p10_profit': df['total_profit'].quantile(0.10),
         'p25_profit': df['total_profit'].quantile(0.25),
         'p75_profit': df['total_profit'].quantile(0.75),
         'p90_profit': df['total_profit'].quantile(0.90),
-        'mean_revenue': df['total_revenue'].mean(),
-        'mean_cost': df['total_cost'].mean(),
-        'mean_tce': df['avg_tce'].mean(),
-        'median_tce': df['avg_tce'].median(),
-        'mean_voyages': df['n_voyages'].mean(),
-        'mean_utilisation': df['utilisation_pct'].mean(),
-        'mean_cargo': df['total_cargo_mt'].mean(),
-        'mean_ports': df['n_ports'].mean(),
-        'profitable_pct': (df['total_profit'] > 0).mean() * 100,
+        'p95_profit': df['total_profit'].quantile(0.95),
+        # Value at Risk — P5 (matches Excel PERCENTILE.INC at 0.05)
+        'var_profit': df['total_profit'].quantile(0.05),
+        # Confidence intervals on the mean
+        'ci95_low':  _mean - _z95 * _stderr,
+        'ci95_high': _mean + _z95 * _stderr,
+        'ci90_low':  _mean - _z90 * _stderr,
+        'ci90_high': _mean + _z90 * _stderr,
+        # Risk metrics
+        'loss_pct':       _loss_p * 100,        # % runs that lose money
+        'profitable_pct': (1 - _loss_p) * 100,
+        # Revenue/cost/operational
+        'mean_revenue':    df['total_revenue'].mean(),
+        'mean_cost':       df['total_cost'].mean(),
+        'mean_tce':        df['avg_tce'].mean(),
+        'median_tce':      df['avg_tce'].median(),
+        'mean_voyages':    df['n_voyages'].mean(),
+        'mean_utilisation':df['utilisation_pct'].mean(),
+        'mean_cargo':      df['total_cargo_mt'].mean(),
+        'mean_ports':      df['n_ports'].mean(),
     }
 
     top_10_pct = df.nlargest(max(1, len(df) // 10), 'total_profit')

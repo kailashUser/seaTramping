@@ -440,16 +440,92 @@ n_iterations = st.sidebar.selectbox(
     key='n_iterations_sidebar',
     disabled=_sim_locked,
 )
-freight_vol = st.sidebar.slider(
-    "Freight Rate Volatility", 0.05, 0.30, 0.15, 0.05,
-    key='freight_vol_sidebar',
+dist_type = st.sidebar.radio(
+    "Distribution type",
+    ["Normal", "Triangular"],
+    index=0,
+    key='dist_type_sidebar',
     disabled=_sim_locked,
+    help=(
+        "Normal: symmetric, unbounded.\n"
+        "Triangular: bounded by Min/Most Likely/Max — "
+        "matches real observed market data ranges."
+    )
 )
-bunker_vol = st.sidebar.slider(
-    "Bunker Price Volatility", 0.05, 0.25, 0.10, 0.05,
-    key='bunker_vol_sidebar',
-    disabled=_sim_locked,
-)
+_use_triangular = (dist_type == "Triangular")
+
+if not _use_triangular:
+    freight_vol = st.sidebar.slider(
+        "Freight Rate Volatility (σ)", 0.05, 0.30, 0.15, 0.05,
+        key='freight_vol_sidebar', disabled=_sim_locked,
+    )
+    bunker_vol = st.sidebar.slider(
+        "Bunker Price Volatility (σ)", 0.05, 0.25, 0.10, 0.05,
+        key='bunker_vol_sidebar', disabled=_sim_locked,
+    )
+    freight_min=0.70; freight_mode=1.00; freight_max=1.40
+    bunker_min=0.75;  bunker_mode=1.00;  bunker_max=1.60
+    cong_min=0.40;    cong_mode=1.00;    cong_max=2.00
+else:
+    freight_vol = 0.15
+    bunker_vol  = 0.10
+    st.sidebar.markdown(
+        "<div style='font-size:11px;font-weight:600;color:#64748b;"
+        "margin-top:4px;margin-bottom:2px'>Freight rate range</div>",
+        unsafe_allow_html=True
+    )
+    _fc1, _fc2, _fc3 = st.sidebar.columns(3)
+    freight_min  = _fc1.number_input("Min",  value=0.70,
+        min_value=0.30, max_value=0.99, step=0.05,
+        key='fr_min_sb', disabled=_sim_locked, format="%.2f")
+    freight_mode = _fc2.number_input("Mode", value=1.00,
+        min_value=0.50, max_value=1.50, step=0.05,
+        key='fr_mode_sb', disabled=_sim_locked, format="%.2f")
+    freight_max  = _fc3.number_input("Max",  value=1.40,
+        min_value=1.01, max_value=2.50, step=0.05,
+        key='fr_max_sb', disabled=_sim_locked, format="%.2f")
+
+    st.sidebar.markdown(
+        "<div style='font-size:11px;font-weight:600;color:#64748b;"
+        "margin-top:4px;margin-bottom:2px'>Bunker price range</div>",
+        unsafe_allow_html=True
+    )
+    _bc1, _bc2, _bc3 = st.sidebar.columns(3)
+    bunker_min   = _bc1.number_input("Min",  value=0.75,
+        min_value=0.30, max_value=0.99, step=0.05,
+        key='bk_min_sb', disabled=_sim_locked, format="%.2f")
+    bunker_mode  = _bc2.number_input("Mode", value=1.00,
+        min_value=0.50, max_value=1.50, step=0.05,
+        key='bk_mode_sb', disabled=_sim_locked, format="%.2f")
+    bunker_max   = _bc3.number_input("Max",  value=1.60,
+        min_value=1.01, max_value=3.00, step=0.05,
+        key='bk_max_sb', disabled=_sim_locked, format="%.2f")
+
+    st.sidebar.markdown(
+        "<div style='font-size:11px;font-weight:600;color:#64748b;"
+        "margin-top:4px;margin-bottom:2px'>Congestion range</div>",
+        unsafe_allow_html=True
+    )
+    _cc1, _cc2, _cc3 = st.sidebar.columns(3)
+    cong_min     = _cc1.number_input("Min",  value=0.40,
+        min_value=0.10, max_value=0.99, step=0.10,
+        key='cg_min_sb', disabled=_sim_locked, format="%.2f")
+    cong_mode    = _cc2.number_input("Mode", value=1.00,
+        min_value=0.50, max_value=2.00, step=0.10,
+        key='cg_mode_sb', disabled=_sim_locked, format="%.2f")
+    cong_max     = _cc3.number_input("Max",  value=2.00,
+        min_value=1.01, max_value=5.00, step=0.10,
+        key='cg_max_sb', disabled=_sim_locked, format="%.2f")
+
+    st.sidebar.markdown(
+        f"<div style='font-size:10px;color:#64748b;margin-top:4px;"
+        f"background:#f8fafc;padding:5px 8px;border-radius:6px'>"
+        f"Freight: {freight_min:.2f}→<b>{freight_mode:.2f}</b>"
+        f"→{freight_max:.2f} · "
+        f"Bunker: {bunker_min:.2f}→<b>{bunker_mode:.2f}</b>"
+        f"→{bunker_max:.2f}</div>",
+        unsafe_allow_html=True
+    )
 
 st.sidebar.markdown("<br>", unsafe_allow_html=True)
 if _sim_locked:
@@ -694,12 +770,21 @@ with tabs[1]:
         pct_above_market = (
             sum(1 for r in results if r['avg_tce'] >= 8500) / max(len(results), 1) * 100
         )
+        # VaR colour — red if negative, amber if within 20% of zero
+        _var_val  = s['var_profit']
+        _var_col  = ('kpi-neg' if _var_val < 0
+                     else 'kpi-pos' if _var_val > s['mean_profit'] * 0.3
+                     else '')
+        _loss_pct = s.get('loss_pct', 100 - s['profitable_pct'])
+
         st.markdown(f"""
 <div class="kpi-row">
   <div class="kpi-card">
     <div class="kpi-val">${s['mean_profit']:,.0f}</div>
     <div class="kpi-lbl">Mean Annual Profit</div>
-    <div class="kpi-del kpi-{'pos' if s['mean_profit']>0 else 'neg'}">P90: ${s['p90_profit']:,.0f}</div>
+    <div class="kpi-del kpi-{'pos' if s['mean_profit']>0 else 'neg'}">
+      P90: ${s['p90_profit']:,.0f}
+    </div>
   </div>
   <div class="kpi-card">
     <div class="kpi-val">${s['median_tce']:,.0f}</div>
@@ -709,20 +794,109 @@ with tabs[1]:
   <div class="kpi-card">
     <div class="kpi-val">{s['profitable_pct']:.1f}%</div>
     <div class="kpi-lbl">Programmes Profitable</div>
-    <div class="kpi-del">{pct_above_market:.1f}% above market TCE</div>
-  </div>
-  <div class="kpi-card">
-    <div class="kpi-val">{s['mean_utilisation']:.1f}%</div>
-    <div class="kpi-lbl">Mean Utilisation</div>
-    <div class="kpi-del">{s['mean_voyages']:.1f} voyages/year avg</div>
+    <div class="kpi-del kpi-neg">{_loss_pct:.1f}% loss-making</div>
   </div>
   <div class="kpi-card">
     <div class="kpi-val">${s['p10_profit']:,.0f}</div>
-    <div class="kpi-lbl">Downside P10 Profit</div>
+    <div class="kpi-lbl">Downside P10</div>
     <div class="kpi-del">Worst 10% scenario</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-val kpi-{_var_col}">${_var_val:,.0f}</div>
+    <div class="kpi-lbl">Value at Risk (P5)</div>
+    <div class="kpi-del">Worst 5% scenario</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
+
+        # ── Extended statistics panel ─────────────────────────────────
+        with st.expander("📊 Full Statistical Summary", expanded=False):
+            _sc1, _sc2, _sc3 = st.columns(3)
+
+            with _sc1:
+                st.markdown(
+                    "<div style='font-size:11px;font-weight:600;"
+                    "color:#64748b;text-transform:uppercase;"
+                    "letter-spacing:.05em;margin-bottom:8px'>"
+                    "Central Tendency</div>",
+                    unsafe_allow_html=True
+                )
+                _stats_left = [
+                    ("Mean profit",   f"${s['mean_profit']:,.0f}"),
+                    ("Median profit", f"${s['median_profit']:,.0f}"),
+                    ("Std deviation", f"${s['std_profit']:,.0f}"),
+                    ("Std error",     f"${s.get('stderr_profit',0):,.0f}"),
+                ]
+                for _lbl, _val in _stats_left:
+                    st.markdown(
+                        f"<div style='display:flex;justify-content:"
+                        f"space-between;font-size:11px;padding:4px 0;"
+                        f"border-bottom:0.5px solid #e2e8f0'>"
+                        f"<span style='color:#64748b'>{_lbl}</span>"
+                        f"<span style='font-weight:500;color:#1a3a5c'>"
+                        f"{_val}</span></div>",
+                        unsafe_allow_html=True
+                    )
+
+            with _sc2:
+                st.markdown(
+                    "<div style='font-size:11px;font-weight:600;"
+                    "color:#64748b;text-transform:uppercase;"
+                    "letter-spacing:.05em;margin-bottom:8px'>"
+                    "Confidence Intervals (on mean)</div>",
+                    unsafe_allow_html=True
+                )
+                _ci95_l = s.get('ci95_low',  s['mean_profit'])
+                _ci95_h = s.get('ci95_high', s['mean_profit'])
+                _ci90_l = s.get('ci90_low',  s['mean_profit'])
+                _ci90_h = s.get('ci90_high', s['mean_profit'])
+                _stats_mid = [
+                    ("95% CI lower", f"${_ci95_l:,.0f}"),
+                    ("95% CI upper", f"${_ci95_h:,.0f}"),
+                    ("90% CI lower", f"${_ci90_l:,.0f}"),
+                    ("90% CI upper", f"${_ci90_h:,.0f}"),
+                ]
+                for _lbl, _val in _stats_mid:
+                    st.markdown(
+                        f"<div style='display:flex;justify-content:"
+                        f"space-between;font-size:11px;padding:4px 0;"
+                        f"border-bottom:0.5px solid #e2e8f0'>"
+                        f"<span style='color:#64748b'>{_lbl}</span>"
+                        f"<span style='font-weight:500;color:#1a3a5c'>"
+                        f"{_val}</span></div>",
+                        unsafe_allow_html=True
+                    )
+
+            with _sc3:
+                st.markdown(
+                    "<div style='font-size:11px;font-weight:600;"
+                    "color:#64748b;text-transform:uppercase;"
+                    "letter-spacing:.05em;margin-bottom:8px'>"
+                    "Risk Metrics</div>",
+                    unsafe_allow_html=True
+                )
+                _var = s.get('var_profit', s['p10_profit'])
+                _loss_p = s.get('loss_pct', 100 - s['profitable_pct'])
+                _stats_right = [
+                    ("Value at Risk (P5)", f"${_var:,.0f}"),
+                    ("P10 downside",       f"${s['p10_profit']:,.0f}"),
+                    ("P25",                f"${s['p25_profit']:,.0f}"),
+                    ("P75",                f"${s['p75_profit']:,.0f}"),
+                    ("P90 upside",         f"${s['p90_profit']:,.0f}"),
+                    ("% loss-making",      f"{_loss_p:.1f}%"),
+                ]
+                for _lbl, _val in _stats_right:
+                    _is_risk = 'Risk' in _lbl or 'P10' in _lbl or 'loss' in _lbl
+                    _vc = '#991b1b' if (_is_risk and _var < 0) else '#1a3a5c'
+                    st.markdown(
+                        f"<div style='display:flex;justify-content:"
+                        f"space-between;font-size:11px;padding:4px 0;"
+                        f"border-bottom:0.5px solid #e2e8f0'>"
+                        f"<span style='color:#64748b'>{_lbl}</span>"
+                        f"<span style='font-weight:500;color:{_vc}'>"
+                        f"{_val}</span></div>",
+                        unsafe_allow_html=True
+                    )
 
         st.markdown("### Profit Distribution")
         profits = [r['total_profit'] for r in results]
@@ -1359,6 +1533,14 @@ if run_simulation_clicked and os.path.exists(DATA_PATH):
         algorithm=_algo_map[algo_choice],
         freight_volatility=freight_vol,
         bunker_volatility=bunker_vol,
+        random_seed=seed_value if 'seed_value' in dir() else None,
+        dist_type='triangular' if _use_triangular else 'normal',
+        freight_min=freight_min,   freight_mode=freight_mode,
+        freight_max=freight_max,
+        bunker_min=bunker_min,     bunker_mode=bunker_mode,
+        bunker_max=bunker_max,
+        cong_min=cong_min,         cong_mode=cong_mode,
+        cong_max=cong_max,
     )
 
     # ── Modal overlay container ───────────────────────────────────────────
