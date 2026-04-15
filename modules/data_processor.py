@@ -11,6 +11,17 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from data.port_coordinates import PORT_COORDS
 from data.port_charges import get_port_charges, STEVEDORING_RATES
+from data.sea_distances_loader import (
+    load_distance_matrix, get_sea_distance_nm, is_loaded,
+    load_route_waypoints,
+)
+
+# Load pre-built sea distance matrix and route waypoints once at module import
+_sea_matrix_loaded    = load_distance_matrix()
+_sea_waypoints_loaded = load_route_waypoints()
+
+# Filter stats written by build_leg_library() — read by sim_logger
+_FILTER_STATS: dict = {}
 
 COMMODITY_GROUPS = {
     'Steam Coal': 'Steam Coal', 'Coking Coal': 'Coking Coal', 'Anthracite': 'Anthracite',
@@ -133,7 +144,7 @@ CARGO_RATE = {
     'Coal': {'load': 8000, 'disch': 6000},
     'Dry Bulk': {'load': 5000, 'disch': 4000},
     'Agri-Bulk': {'load': 4000, 'disch': 3500},
-    'Break-Bulk': {'load': 2000, 'disch': 1800},
+    'Break-Bulk': {'load': 5000, 'disch': 4000},  # same as Dry Bulk — 20K DWT tramping
     'Steel/Metal': {'load': 2500, 'disch': 2000},
     'Fertilizers': {'load': 4000, 'disch': 3500},
 }
@@ -148,7 +159,24 @@ def haversine_nm(lat1, lon1, lat2, lon2):
     return 2 * R * math.asin(math.sqrt(a))
 
 
-def sea_distance(port1_coords, port2_coords, port1_country, port2_country):
+def sea_distance(port1_coords, port2_coords, port1_country, port2_country,
+                 port1_name="", port2_name=""):
+    """
+    Return sea distance in NM between two ports.
+    Uses pre-built searoute matrix when available; falls back to Haversine × factor.
+    """
+    # Try real sea distance matrix first
+    if is_loaded() and port1_name and port2_name:
+        nm = get_sea_distance_nm(
+            port1_name, port2_name,
+            port_coords=PORT_COORDS,
+            country_a=port1_country,
+            country_b=port2_country,
+        )
+        if nm > 0:
+            return nm
+
+    # Haversine × correction factor fallback
     straight_nm = haversine_nm(*port1_coords, *port2_coords)
     lat1, lon1 = port1_coords
     lat2, lon2 = port2_coords
@@ -244,7 +272,9 @@ def build_distance_matrix(ports_df):
             d = sea_distance(
                 (ports_df.iloc[i]['Lat'], ports_df.iloc[i]['Lon']),
                 (ports_df.iloc[j]['Lat'], ports_df.iloc[j]['Lon']),
-                ports_df.iloc[i]['Country'], ports_df.iloc[j]['Country']
+                ports_df.iloc[i]['Country'], ports_df.iloc[j]['Country'],
+                port1_name=ports_df.iloc[i]['Port'],
+                port2_name=ports_df.iloc[j]['Port'],
             )
             dist_matrix[i][j] = d
             dist_matrix[j][i] = d
@@ -337,6 +367,7 @@ def build_leg_library(ports_df, dist_matrix, intra_data):
                     'origin_port': origin, 'dest_port': dest,
                     'origin_country': port_countries[i], 'dest_country': port_countries[j],
                     'commodity': commodity, 'category': cat,
+                    'direction': 'Intra-SEA',
                     'distance_nm': dist, 'status': status,
                     'annual_volume_mt': annual_vol,
                     'freight_rate_usd_mt': freight_rate,
@@ -354,4 +385,86 @@ def build_leg_library(ports_df, dist_matrix, intra_data):
                     'load_rate_mt_day': cargo_rate['load'], 'disch_rate_mt_day': cargo_rate['disch'],
                 })
 
-    return pd.DataFrame(legs)
+    legs_df = pd.DataFrame(legs)
+    if legs_df.empty:
+        return legs_df
+
+    _n_raw = len(legs_df)
+
+    # Fix 1a — keep only genuine Intra-SEA routes by country membership.
+    # All generated legs carry direction='Intra-SEA' as a hardcoded tag so
+    # a string equality check is a no-op.  Instead, filter on country: both
+    # origin AND destination must be within the SEA tramping region.
+    # This removes any legs involving ports tagged to non-SEA countries
+    # (e.g. Japan, India, Europe) that may have slipped into the port DB.
+    _SEA_COUNTRIES = {
+        'Indonesia', 'Philippines', 'Vietnam', 'Malaysia', 'Thailand',
+        'Singapore', 'Bangladesh', 'Myanmar', 'Cambodia', 'Timor-Leste',
+        'Brunei', 'Sri Lanka',
+    }
+    legs_df = legs_df[
+        legs_df['origin_country'].isin(_SEA_COUNTRIES) &
+        legs_df['dest_country'].isin(_SEA_COUNTRIES)
+    ]
+    _n_intra = len(legs_df)
+
+    # Fix 1b — remove Break-Bulk and Project Cargo (slow cargo, distorts port stay)
+    legs_df = legs_df[~legs_df['category'].isin(['Break-Bulk'])]
+    _n_no_bb = len(legs_df)
+
+    # Fix 1c — remove legs involving NOT_SUITABLE ports
+    try:
+        from data.port_restrictions import NOT_SUITABLE_PORTS
+        legs_df = legs_df[
+            ~legs_df['origin_port'].isin(NOT_SUITABLE_PORTS) &
+            ~legs_df['dest_port'].isin(NOT_SUITABLE_PORTS)
+        ]
+    except ImportError:
+        pass
+    _n_no_blocked = len(legs_df)
+
+    # Fix 1d — country-level exclusion (Cambodia: shallow river ports, no 20K DWT access)
+    _EXCLUDED_COUNTRIES = {'Cambodia'}
+    legs_df = legs_df[
+        ~legs_df['origin_country'].isin(_EXCLUDED_COUNTRIES) &
+        ~legs_df['dest_country'].isin(_EXCLUDED_COUNTRIES)
+    ]
+
+    # Fix 2 — commodity restrictions for restricted ports.
+    # Only certain commodities make operational sense at each port.
+    _PORT_COMMODITY_ALLOW = {
+        'Samarinda':             {'Steam Coal', 'Coking Coal', 'Petroleum Coke'},
+        'Bangkok (Khlong Toei)': {'Steam Coal', 'Clinker', 'Cement'},
+        'Mongla':                {'Steam Coal', 'Clinker'},
+        'Yangon':                {'Steam Coal', 'Rice', 'Fertilizers'},
+    }
+    for _port, _allowed in _PORT_COMMODITY_ALLOW.items():
+        # Restrict legs where this port appears as origin (loading)
+        _origin_mask = legs_df['origin_port'] == _port
+        if _origin_mask.any():
+            legs_df = legs_df[
+                ~_origin_mask | legs_df['commodity'].isin(_allowed)
+            ]
+        # Restrict legs where this port appears as destination (discharge)
+        _dest_mask = legs_df['dest_port'] == _port
+        if _dest_mask.any():
+            legs_df = legs_df[
+                ~_dest_mask | legs_df['commodity'].isin(_allowed)
+            ]
+
+    _n_final = len(legs_df)
+
+    # Record filter stats for sim_logger (mutate in place so imported references stay valid)
+    _cat_counts = legs_df['category'].value_counts().to_dict() if _n_final > 0 else {}
+    _FILTER_STATS.update({
+        'n_raw':        _n_raw,
+        'n_intra_sea':  _n_intra,
+        'n_no_bb':      _n_no_bb,
+        'n_no_blocked': _n_no_blocked,
+        'n_final':      _n_final,
+        'categories':   _cat_counts,
+        'n_ports':      len(port_names),
+        'active_ports': sorted(set(legs_df['origin_port'].tolist() + legs_df['dest_port'].tolist())) if _n_final > 0 else [],
+    })
+
+    return legs_df.reset_index(drop=True)

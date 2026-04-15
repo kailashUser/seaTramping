@@ -19,6 +19,36 @@ try:
 except ImportError:
     HAS_NX = False
 
+try:
+    from data.port_restrictions import (
+        is_port_blocked,
+        get_tidal_penalty,
+        NOT_SUITABLE_PORTS,
+        RESTRICTED_PORTS,
+        DISCHARGE_BLOCKED_PORTS,
+    )
+    HAS_PORT_RESTRICTIONS = True
+except ImportError:
+    HAS_PORT_RESTRICTIONS = False
+    NOT_SUITABLE_PORTS = set()
+    RESTRICTED_PORTS = {}
+    DISCHARGE_BLOCKED_PORTS = {}
+    def is_port_blocked(p): return False
+    def get_tidal_penalty(p): return 0.0
+
+try:
+    from data.cargo_intelligence import (
+        get_cleaning_cost,
+        get_backhaul_penalty,
+        get_seasonal_factor,
+    )
+    HAS_CARGO_INTEL = True
+except ImportError:
+    HAS_CARGO_INTEL = False
+    def get_cleaning_cost(a, b): return {"grade": "G", "days": 0.0, "cost": 0}
+    def get_backhaul_penalty(c): return 1.0
+    def get_seasonal_factor(c, m): return 1.0
+
 
 # ─── VESSEL & SIM CONFIG ──────────────────────────────────────────────────────
 
@@ -55,6 +85,11 @@ class VesselConfig:
     fuel_ballast_mt_day: float = 13.5
     bunker_price_mt: float = 560.0
     min_cargo_pct: float = 1.0         # always full DWCC
+    # Physical dimensions — used for port access validation
+    draft_laden:   float = 9.5         # metres, laden condition
+    draft_ballast: float = 5.5         # metres, ballast condition
+    loa:           float = 150.0       # metres, length overall
+    beam:          float = 24.0        # metres, beam
 
 
 @dataclass
@@ -165,6 +200,11 @@ class VoyageLeg:
     load_handling_cost: float = 0.0
     disch_handling_cost: float = 0.0
     charter_hire_cost: float = 0.0
+    # Two-phase breakdown
+    ballast_phase:      dict = field(default_factory=dict)
+    laden_phase:        dict = field(default_factory=dict)
+    ballast_ratio:      float = 0.0
+    ballast_cost_total: float = 0.0
 
 
 @dataclass
@@ -268,6 +308,38 @@ def cost_voyage_exact(
     total_expenses = charter_hire + bunker_cost + port_costs + insurance + other_costs
     profit_loss = net_income - total_expenses
 
+    # ── Two-phase breakdown ───────────────────────────────────────────────────
+    # Phase 1 — Ballast: costs only for empty sailing leg to load port
+    _bl_lsfo = (vessel.lsfo_ballast * ballast_days) * lsfo_price
+    _bl_mgo  = (vessel.mgo_ballast  * ballast_days) * mgo_price
+    _bl_hire = vessel.charter_hire_day * ballast_days
+    _bl_total = _bl_hire + _bl_lsfo + _bl_mgo
+
+    # Phase 2 — Laden: loaded leg + port time + cong (revenue + costs)
+    _la_days = laden_days + port_days + idle_days + maneuver_days + total_cong_days
+    _la_hire = vessel.charter_hire_day * _la_days
+
+    ballast_phase = {
+        'nm':           round(ballast_nm, 1),
+        'days':         round(ballast_days, 2),
+        'charter_cost': round(_bl_hire, 0),
+        'bunker_cost':  round(_bl_lsfo + _bl_mgo, 0),
+        'total_cost':   round(_bl_total, 0),
+        'revenue':      0.0,
+        'net':          round(-_bl_total, 0),
+    }
+    laden_phase = {
+        'nm':            round(laden_nm, 1),
+        'days':          round(_la_days, 2),
+        'charter_cost':  round(_la_hire, 0),
+        'bunker_cost':   round(lsfo_cost + mgo_cost - _bl_lsfo - _bl_mgo, 0),
+        'port_cost':     round(port_costs, 0),
+        'gross_freight': round(gross_freight, 0),
+        'net_income':    round(net_income, 0),
+        'net':           round(profit_loss, 0),
+    }
+    ballast_ratio = ballast_days / max(total_days, 1)
+
     return {
         'gross_freight': gross_freight,
         'brokerage': brokerage,
@@ -301,6 +373,11 @@ def cost_voyage_exact(
         'total_days': total_days,
         'profit_per_day': profit_loss / total_days,
         'profit_per_mt': profit_loss / cargo_mt if cargo_mt > 0 else 0.0,
+        # Two-phase breakdown
+        'ballast_phase':      ballast_phase,
+        'laden_phase':        laden_phase,
+        'ballast_ratio':      round(ballast_ratio, 3),
+        'ballast_cost_total': round(_bl_total, 0),
     }
 
 
@@ -450,6 +527,10 @@ class FastLegLibrary:
         cargo = v.dwcc
         load_cong  = float(self.load_cong_arr[idx]) * cong_mult
         disch_cong = float(self.disch_cong_arr[idx]) * cong_mult
+        # Add tidal waiting penalty for restricted ports
+        if HAS_PORT_RESTRICTIONS:
+            load_cong  += get_tidal_penalty(str(self.origin_ports[idx]))
+            disch_cong += get_tidal_penalty(str(self.dest_ports[idx]))
         load_nav   = float(self.load_nav[idx]) * port_charge_mult
         disch_nav  = float(self.disch_nav[idx]) * port_charge_mult
         steve_load = float(self.load_steve_per_mt_arr[idx]) if use_stevedoring else 0.0
@@ -608,6 +689,14 @@ def greedy_programme(
     port_charge_vol: float = 0.15,
     congestion_vol: float = 0.40,
     use_stevedoring: bool = False,
+    dist_type: str = 'normal',
+    cong_min: float = 0.40,
+    cong_mode: float = 1.00,
+    cong_max: float = 2.00,
+    freight_min: float = 0.70,
+    freight_mode: float = 1.00,
+    freight_max: float = 1.40,
+    port_country_dict: Optional[dict] = None,
 ) -> VoyageProgramme:
     """
     Greedy construction: at each step pick the best-profit feasible leg
@@ -626,19 +715,18 @@ def greedy_programme(
     current_port_id = start_port_id
     current_port_name = _port_name_from_id(fast_lib, current_port_id)
     remaining_days = float(vessel.operating_days_year)
+    elapsed_days = 0.0
+    prev_commodity = ""
 
     # Iteration-level stochastic multipliers (fixed per programme)
-    _dt = getattr(sim_config, 'dist_type', 'normal')
     pc_mult = float(_sample_mult(
-        rng, _dt, port_charge_vol,
+        rng, dist_type, port_charge_vol,
         tri_min=0.70, tri_mode=1.00, tri_max=1.40,
         clip_lo=0.5, clip_hi=2.0
     ))
     cong_mult = float(_sample_mult(
-        rng, _dt, congestion_vol,
-        tri_min=getattr(sim_config, 'cong_min',  0.40),
-        tri_mode=getattr(sim_config, 'cong_mode', 1.00),
-        tri_max=getattr(sim_config, 'cong_max',  2.00),
+        rng, dist_type, congestion_vol,
+        tri_min=cong_min, tri_mode=cong_mode, tri_max=cong_max,
         clip_lo=0.1, clip_hi=4.0
     ))
 
@@ -649,15 +737,40 @@ def greedy_programme(
         # Collect all reachable leg indices
         cand_indices = []
         cand_ballast = []
+        # Ports exempt from the laden-draft load-port check:
+        # vessel loads partial cargo and leaves at reduced draft.
+        _PARTIAL_LOAD_EXEMPT = {'Samarinda'}
         for orig_id, idx_arr in fast_lib.by_origin.items():
             b_nm = dist_matrix[current_port_id, orig_id]
             b_days = b_nm / (vessel.speed_ballast_knots * 24.0)
             if b_days > remaining_days * 0.45:
                 continue
+            # Block load ports where the vessel would depart laden above max_draft
+            if HAS_PORT_RESTRICTIONS and len(idx_arr) > 0:
+                orig = str(fast_lib.origin_ports[idx_arr[0]])
+                if (orig not in _PARTIAL_LOAD_EXEMPT
+                        and orig in RESTRICTED_PORTS
+                        and vessel.draft_laden > RESTRICTED_PORTS[orig].get('max_draft', 99.0)):
+                    continue
             # Quick total days estimate to filter out too-long voyages
             for i in idx_arr:
                 est = fast_lib._days_fixed[i] + b_days
                 if est <= remaining_days:
+                    # Skip legs whose destination is physically blocked
+                    if HAS_PORT_RESTRICTIONS:
+                        dest = str(fast_lib.dest_ports[i])
+                        if is_port_blocked(dest):
+                            continue
+                        # Explicit draft gate for known restricted discharge ports
+                        if dest in DISCHARGE_BLOCKED_PORTS:
+                            if vessel.draft_laden > DISCHARGE_BLOCKED_PORTS[dest]:
+                                continue
+                        # Block restricted ports where laden draft exceeds max_draft
+                        # (vessel can still call ballast as origin/loading port)
+                        if dest in RESTRICTED_PORTS:
+                            _max_d = RESTRICTED_PORTS[dest].get('max_draft', 99.0)
+                            if vessel.draft_laden > _max_d:
+                                continue
                     cand_indices.append(i)
                     cand_ballast.append(b_nm)
 
@@ -675,10 +788,8 @@ def greedy_programme(
 
         # Stochastic freight multipliers
         freight_mult = _sample_mult(
-            rng, _dt, freight_vol,
-            tri_min=getattr(sim_config, 'freight_min',  0.70),
-            tri_mode=getattr(sim_config, 'freight_mode', 1.00),
-            tri_max=getattr(sim_config, 'freight_max',  1.40),
+            rng, dist_type, freight_vol,
+            tri_min=freight_min, tri_mode=freight_mode, tri_max=freight_max,
             size=len(cand_indices), clip_lo=0.5, clip_hi=2.0
         )
 
@@ -687,6 +798,14 @@ def greedy_programme(
             port_charge_mult=pc_mult, cong_mult=cong_mult,
             use_stevedoring=use_stevedoring,
         )
+
+        # Apply backhaul penalty to scoring only (does not change final P&L)
+        if HAS_CARGO_INTEL and port_country_dict:
+            bh_penalties = np.array([
+                get_backhaul_penalty(port_country_dict.get(str(fast_lib.dest_ports[i]), ""))
+                for i in cand_indices
+            ])
+            ppd = ppd * bh_penalties
 
         # Softmax selection
         ppd_norm = ppd - ppd.max()
@@ -698,7 +817,12 @@ def greedy_programme(
         chosen = int(rng.choice(len(cand_indices), p=probs))
         idx = int(cand_indices[chosen])
         b_nm = float(cand_ballast[chosen])
-        fr = float(fast_lib.base_freight[idx]) * float(freight_mult[chosen])
+
+        # Seasonal freight rate adjustment
+        sim_month = int((elapsed_days / 30.0) % 12) + 1
+        commodity_name = str(fast_lib.commodities[idx])
+        seasonal_f = get_seasonal_factor(commodity_name, sim_month) if HAS_CARGO_INTEL else 1.0
+        fr = float(fast_lib.base_freight[idx]) * float(freight_mult[chosen]) * seasonal_f
 
         leg = fast_lib.build_voyage_leg(
             idx, b_nm, current_port_name, lsfo_price, mgo_price, fr,
@@ -707,6 +831,25 @@ def greedy_programme(
         )
         if leg is None or leg.total_days > remaining_days:
             continue
+
+        # Hold cleaning: apply cost when switching commodity
+        if HAS_CARGO_INTEL and prev_commodity:
+            cleaning = get_cleaning_cost(prev_commodity, leg.commodity)
+            if cleaning["cost"] > 0 or cleaning["days"] > 0:
+                leg.other_costs       += cleaning["cost"]
+                leg.total_expenses    += cleaning["cost"]
+                leg.profit_loss       -= cleaning["cost"]
+                leg.profit            -= cleaning["cost"]
+                leg.total_days        += cleaning["days"]
+                leg.charter_hire      += vessel.charter_hire_day * cleaning["days"]
+                leg.total_expenses    += vessel.charter_hire_day * cleaning["days"]
+                leg.profit_loss       -= vessel.charter_hire_day * cleaning["days"]
+                leg.profit            -= vessel.charter_hire_day * cleaning["days"]
+        leg.cleaning_cost  = get_cleaning_cost(prev_commodity, leg.commodity)["cost"] if HAS_CARGO_INTEL and prev_commodity else 0
+        leg.cleaning_days  = get_cleaning_cost(prev_commodity, leg.commodity)["days"] if HAS_CARGO_INTEL and prev_commodity else 0.0
+        leg.hold_switch    = f"{prev_commodity} -> {leg.commodity}" if prev_commodity and prev_commodity != leg.commodity else ""
+        leg.seasonal_factor = seasonal_f
+        leg.sim_month       = sim_month
 
         programme.legs.append(leg)
         programme.total_revenue += leg.gross_freight
@@ -721,7 +864,9 @@ def greedy_programme(
 
         current_port_id = leg.dest_id
         current_port_name = leg.dest_port
+        elapsed_days += leg.total_days
         remaining_days -= leg.total_days
+        prev_commodity = leg.commodity
 
     _finalise_programme(programme, vessel)
     return programme
@@ -896,6 +1041,11 @@ def _finalise_programme(programme: VoyageProgramme, vessel: VesselConfig):
 
 def programme_to_result(programme: VoyageProgramme, phase: int, iteration: int) -> dict:
     """Serialize a VoyageProgramme to a storable dict (full detail for Tab 5)."""
+    legs = programme.legs
+    total_ballast_days = sum(l.ballast_days for l in legs)
+    total_laden_days   = sum(l.laden_days   for l in legs)
+    ballast_ratio = total_ballast_days / max(total_ballast_days + total_laden_days, 1)
+    ballast_cost_total = sum(l.ballast_cost_total for l in legs)
     return {
         'phase': phase,
         'iteration': iteration,
@@ -912,7 +1062,12 @@ def programme_to_result(programme: VoyageProgramme, phase: int, iteration: int) 
         'n_ports': len(programme.ports_visited),
         'ports_visited': list(programme.ports_visited),
         'commodities_carried': list(programme.commodities_carried),
-        'legs': [_leg_to_dict(l) for l in programme.legs],
+        'legs': [_leg_to_dict(l) for l in legs],
+        # Programme-level ballast stats
+        'total_ballast_days': round(total_ballast_days, 1),
+        'total_laden_days':   round(total_laden_days, 1),
+        'ballast_ratio':      round(ballast_ratio, 3),
+        'ballast_cost_total': round(ballast_cost_total, 0),
     }
 
 
@@ -978,6 +1133,17 @@ def _leg_to_dict(l: VoyageLeg) -> dict:
         'tce': l.tce,
         'distance_nm': l.laden_nm,
         'ballast_distance_nm': l.ballast_nm,
+        # Two-phase breakdown
+        'ballast_phase':      getattr(l, 'ballast_phase', {}),
+        'laden_phase':        getattr(l, 'laden_phase', {}),
+        'ballast_ratio':      getattr(l, 'ballast_ratio', 0.0),
+        'ballast_cost_total': getattr(l, 'ballast_cost_total', 0.0),
+        # Cargo intelligence
+        'cleaning_cost':   getattr(l, 'cleaning_cost', 0),
+        'cleaning_days':   getattr(l, 'cleaning_days', 0.0),
+        'hold_switch':     getattr(l, 'hold_switch', ''),
+        'seasonal_factor': getattr(l, 'seasonal_factor', 1.0),
+        'sim_month':       getattr(l, 'sim_month', 1),
     }
 
 
@@ -1000,10 +1166,19 @@ def run_full_simulation(
     # Ensure legs_df has the new cost columns (backward compat with old data_processor)
     legs_df = _ensure_port_cost_columns(legs_df)
 
+    # Build port → country lookup for backhaul penalty
+    port_country_dict: dict = {}
+    if 'dest_port' in legs_df.columns and 'dest_country' in legs_df.columns:
+        for _, row in legs_df[['dest_port', 'dest_country']].drop_duplicates().iterrows():
+            port_country_dict[str(row['dest_port'])] = str(row['dest_country'])
+    if 'origin_port' in legs_df.columns and 'origin_country' in legs_df.columns:
+        for _, row in legs_df[['origin_port', 'origin_country']].drop_duplicates().iterrows():
+            port_country_dict.setdefault(str(row['origin_port']), str(row['origin_country']))
+
     fast_lib = FastLegLibrary(legs_df, vessel)
     all_results = []
     total = sim_config.n_iterations
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(sim_config.random_seed)
 
     algo = sim_config.algorithm.lower()
     n_greedy = int(total * 0.30) if algo in ('hybrid', 'greedy') else 0
@@ -1022,19 +1197,7 @@ def run_full_simulation(
         if progress_callback:
             progress_callback("Greedy + Local Search", 0, total)
 
-        # Compute graph centrality for smart starting ports
-        if HAS_NX:
-            G = build_voyage_graph(legs_df, vessel)
-            centrality = compute_port_centrality(G)
-            top_start_ports = sorted(centrality, key=centrality.get, reverse=True)[:10]
-            port_name_to_id = {}
-            for _, row in legs_df[['origin_id', 'origin_port']].drop_duplicates().iterrows():
-                port_name_to_id[row['origin_port']] = int(row['origin_id'])
-            top_start_ids = [port_name_to_id.get(p) for p in top_start_ports if p in port_name_to_id]
-            top_start_ids = [x for x in top_start_ids if x is not None]
-        else:
-            top_start_ids = []
-
+        n_ports = dist_matrix.shape[0]
         temperatures = np.linspace(1.5, 0.3, n_greedy)
 
         for i in range(n_greedy):
@@ -1047,9 +1210,7 @@ def run_full_simulation(
                 b_max=sim_config.bunker_max,
             )
 
-            start = None
-            if top_start_ids and i % 3 != 0:
-                start = int(rng.choice(top_start_ids))
+            start = int(rng.integers(0, n_ports))
 
             prog = greedy_programme(
                 fast_lib, dist_matrix, vessel, rng,
@@ -1060,6 +1221,14 @@ def run_full_simulation(
                 port_charge_vol=port_charge_vol,
                 congestion_vol=congestion_vol,
                 use_stevedoring=use_stevedoring,
+                dist_type=sim_config.dist_type,
+                cong_min=sim_config.cong_min,
+                cong_mode=sim_config.cong_mode,
+                cong_max=sim_config.cong_max,
+                freight_min=sim_config.freight_min,
+                freight_mode=sim_config.freight_mode,
+                freight_max=sim_config.freight_max,
+                port_country_dict=port_country_dict,
             )
 
             if sim_config.local_search_passes > 0 and prog.n_voyages > 2:
@@ -1092,7 +1261,15 @@ def run_full_simulation(
                              sim_config.freight_volatility, lsfo, mgo,
                              port_charge_vol=port_charge_vol,
                              congestion_vol=congestion_vol,
-                             use_stevedoring=use_stevedoring)
+                             use_stevedoring=use_stevedoring,
+                             dist_type=sim_config.dist_type,
+                             cong_min=sim_config.cong_min,
+                             cong_mode=sim_config.cong_mode,
+                             cong_max=sim_config.cong_max,
+                             freight_min=sim_config.freight_min,
+                             freight_mode=sim_config.freight_mode,
+                             freight_max=sim_config.freight_max,
+                             port_country_dict=port_country_dict)
         all_results.append(programme_to_result(prog, phase=1, iteration=n_greedy + i))
         if progress_callback and i % max(1, n_explore // 20) == 0:
             progress_callback("Phase 1: Pure Exploration", n_greedy + i, total)
@@ -1118,7 +1295,15 @@ def run_full_simulation(
                              sim_config.freight_volatility, lsfo, mgo,
                              port_charge_vol=port_charge_vol,
                              congestion_vol=congestion_vol,
-                             use_stevedoring=use_stevedoring)
+                             use_stevedoring=use_stevedoring,
+                             dist_type=sim_config.dist_type,
+                             cong_min=sim_config.cong_min,
+                             cong_mode=sim_config.cong_mode,
+                             cong_max=sim_config.cong_max,
+                             freight_min=sim_config.freight_min,
+                             freight_mode=sim_config.freight_mode,
+                             freight_max=sim_config.freight_max,
+                             port_country_dict=port_country_dict)
         all_results.append(programme_to_result(prog, phase=2, iteration=n_greedy + n_explore + i))
         if progress_callback and i % max(1, n_informed // 20) == 0:
             progress_callback("Phase 2: Informed Exploration", n_greedy + n_explore + i, total)
@@ -1144,7 +1329,15 @@ def run_full_simulation(
                              sim_config.freight_volatility, lsfo, mgo,
                              port_charge_vol=port_charge_vol,
                              congestion_vol=congestion_vol,
-                             use_stevedoring=use_stevedoring)
+                             use_stevedoring=use_stevedoring,
+                             dist_type=sim_config.dist_type,
+                             cong_min=sim_config.cong_min,
+                             cong_mode=sim_config.cong_mode,
+                             cong_max=sim_config.cong_max,
+                             freight_min=sim_config.freight_min,
+                             freight_mode=sim_config.freight_mode,
+                             freight_max=sim_config.freight_max,
+                             port_country_dict=port_country_dict)
         all_results.append(programme_to_result(prog, phase=3, iteration=n_greedy + n_explore + n_informed + i))
         if progress_callback and i % max(1, n_exploit // 20) == 0:
             progress_callback("Phase 3: Intensive Exploitation",
@@ -1174,6 +1367,14 @@ def _mc_programme(
     port_charge_vol: float = 0.15,
     congestion_vol: float = 0.40,
     use_stevedoring: bool = False,
+    dist_type: str = 'normal',
+    cong_min: float = 0.40,
+    cong_mode: float = 1.00,
+    cong_max: float = 2.00,
+    freight_min: float = 0.70,
+    freight_mode: float = 1.00,
+    freight_max: float = 1.40,
+    port_country_dict: Optional[dict] = None,
 ) -> VoyageProgramme:
     """Single Monte Carlo voyage programme using FastLegLibrary."""
     n_ports = dist_matrix.shape[0]
@@ -1192,19 +1393,20 @@ def _mc_programme(
 
     current_port_name = _port_name_from_id(fast_lib, current_port_id)
     remaining_days = float(vessel.operating_days_year)
+    elapsed_days = 0.0
+    prev_commodity = ""
 
     # Iteration-level stochastic multipliers (fixed per programme for consistency)
-    _dt_mc = getattr(sim_config, 'dist_type', 'normal')
     pc_mult = float(_sample_mult(
-        rng, _dt_mc, port_charge_vol,
+        rng, dist_type, port_charge_vol,
         tri_min=0.70, tri_mode=1.00, tri_max=1.40,
         clip_lo=0.5, clip_hi=2.0
     ))
     cong_mult = float(_sample_mult(
-        rng, _dt_mc, congestion_vol,
-        tri_min=getattr(sim_config, 'cong_min',  0.40),
-        tri_mode=getattr(sim_config, 'cong_mode', 1.00),
-        tri_max=getattr(sim_config, 'cong_max',  2.00),
+        rng, dist_type, congestion_vol,
+        tri_min=cong_min,
+        tri_mode=cong_mode,
+        tri_max=cong_max,
         clip_lo=0.1, clip_hi=4.0
     ))
 
@@ -1213,14 +1415,36 @@ def _mc_programme(
             break
 
         cand_indices, cand_ballast = [], []
+        _PARTIAL_LOAD_EXEMPT = {'Samarinda'}
         for orig_id, idx_arr in fast_lib.by_origin.items():
             b_nm = dist_matrix[current_port_id, orig_id]
             b_days = b_nm / (vessel.speed_ballast_knots * 24.0)
             if b_days > remaining_days * 0.45:
                 continue
+            # Block load ports where the vessel would depart laden above max_draft
+            if HAS_PORT_RESTRICTIONS and len(idx_arr) > 0:
+                orig = str(fast_lib.origin_ports[idx_arr[0]])
+                if (orig not in _PARTIAL_LOAD_EXEMPT
+                        and orig in RESTRICTED_PORTS
+                        and vessel.draft_laden > RESTRICTED_PORTS[orig].get('max_draft', 99.0)):
+                    continue
             for i in idx_arr:
                 est = fast_lib._days_fixed[i] + b_days
                 if est <= remaining_days:
+                    # Skip blocked destinations and restricted ports that
+                    # cannot receive a laden vessel (draft check)
+                    if HAS_PORT_RESTRICTIONS:
+                        dest = str(fast_lib.dest_ports[i])
+                        if is_port_blocked(dest):
+                            continue
+                        # Explicit draft gate for known restricted discharge ports
+                        if dest in DISCHARGE_BLOCKED_PORTS:
+                            if vessel.draft_laden > DISCHARGE_BLOCKED_PORTS[dest]:
+                                continue
+                        if dest in RESTRICTED_PORTS:
+                            _max_d = RESTRICTED_PORTS[dest].get('max_draft', 99.0)
+                            if vessel.draft_laden > _max_d:
+                                continue
                     cand_indices.append(i)
                     cand_ballast.append(b_nm)
 
@@ -1236,10 +1460,8 @@ def _mc_programme(
             cand_ballast = cand_ballast[sel]
 
         freight_mult = _sample_mult(
-            rng, _dt_mc, freight_vol,
-            tri_min=getattr(sim_config, 'freight_min',  0.70),
-            tri_mode=getattr(sim_config, 'freight_mode', 1.00),
-            tri_max=getattr(sim_config, 'freight_max',  1.40),
+            rng, dist_type, freight_vol,
+            tri_min=freight_min, tri_mode=freight_mode, tri_max=freight_max,
             size=len(cand_indices), clip_lo=0.5, clip_hi=2.0
         )
         ppd = fast_lib.evaluate_candidates(
@@ -1247,6 +1469,14 @@ def _mc_programme(
             port_charge_mult=pc_mult, cong_mult=cong_mult,
             use_stevedoring=use_stevedoring,
         )
+
+        # Backhaul penalty applied to scoring only
+        if HAS_CARGO_INTEL and port_country_dict:
+            bh_penalties = np.array([
+                get_backhaul_penalty(port_country_dict.get(str(fast_lib.dest_ports[i]), ""))
+                for i in cand_indices
+            ])
+            ppd = ppd * bh_penalties
 
         ppd_norm = ppd - ppd.max()
         exp_v = np.exp(ppd_norm / max(temperature, 0.01))
@@ -1257,7 +1487,12 @@ def _mc_programme(
         chosen = int(rng.choice(len(cand_indices), p=probs))
         idx = int(cand_indices[chosen])
         b_nm = float(cand_ballast[chosen])
-        fr = float(fast_lib.base_freight[idx]) * float(freight_mult[chosen])
+
+        # Seasonal freight rate adjustment
+        sim_month = int((elapsed_days / 30.0) % 12) + 1
+        commodity_name = str(fast_lib.commodities[idx])
+        seasonal_f = get_seasonal_factor(commodity_name, sim_month) if HAS_CARGO_INTEL else 1.0
+        fr = float(fast_lib.base_freight[idx]) * float(freight_mult[chosen]) * seasonal_f
 
         leg = fast_lib.build_voyage_leg(
             idx, b_nm, current_port_name, lsfo_price, mgo_price, fr,
@@ -1266,6 +1501,26 @@ def _mc_programme(
         )
         if leg is None or leg.total_days > remaining_days:
             continue
+
+        # Hold cleaning cost on commodity switch
+        if HAS_CARGO_INTEL and prev_commodity:
+            cleaning = get_cleaning_cost(prev_commodity, leg.commodity)
+            if cleaning["cost"] > 0 or cleaning["days"] > 0:
+                leg.other_costs    += cleaning["cost"]
+                leg.total_expenses += cleaning["cost"]
+                leg.profit_loss    -= cleaning["cost"]
+                leg.profit         -= cleaning["cost"]
+                leg.total_days     += cleaning["days"]
+                extra_hire = vessel.charter_hire_day * cleaning["days"]
+                leg.charter_hire   += extra_hire
+                leg.total_expenses += extra_hire
+                leg.profit_loss    -= extra_hire
+                leg.profit         -= extra_hire
+        leg.cleaning_cost   = get_cleaning_cost(prev_commodity, leg.commodity)["cost"] if HAS_CARGO_INTEL and prev_commodity else 0
+        leg.cleaning_days   = get_cleaning_cost(prev_commodity, leg.commodity)["days"] if HAS_CARGO_INTEL and prev_commodity else 0.0
+        leg.hold_switch     = f"{prev_commodity} -> {leg.commodity}" if prev_commodity and prev_commodity != leg.commodity else ""
+        leg.seasonal_factor = seasonal_f
+        leg.sim_month       = sim_month
 
         programme.legs.append(leg)
         programme.total_revenue += leg.gross_freight
@@ -1280,7 +1535,9 @@ def _mc_programme(
 
         current_port_id = leg.dest_id
         current_port_name = leg.dest_port
+        elapsed_days += leg.total_days
         remaining_days -= leg.total_days
+        prev_commodity = leg.commodity
 
     _finalise_programme(programme, vessel)
     return programme
@@ -1427,6 +1684,10 @@ def analyse_results(results, ports_df):
             'commodities': r['commodities_carried'],
             'algorithm': r.get('algorithm', 'monte_carlo'),
             'legs': r['legs'],
+            'ballast_ratio':      r.get('ballast_ratio', 0.0),
+            'ballast_cost_total': r.get('ballast_cost_total', 0.0),
+            'total_ballast_days': r.get('total_ballast_days', 0.0),
+            'total_laden_days':   r.get('total_laden_days', 0.0),
         })
     analysis['top_programmes'] = top_programmes
 

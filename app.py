@@ -14,6 +14,93 @@ import os
 import time
 import math
 import json as _json
+import requests
+import re
+
+# ── Live data helpers ──────────────────────────────────────────────────────────
+VESSEL_API_KEY  = "86231bda2f1b18af2ef3a6eaac09722c63dee57d9138d93eab0a7b5e4dfb81fd"
+VESSEL_API_BASE = "https://api.vesselapi.com/v1"
+
+
+def fetch_vessel_from_imo(imo_number: str) -> dict:
+    """Look up vessel dimensions from VesselAPI using IMO number."""
+    try:
+        headers = {"Authorization": f"Bearer {VESSEL_API_KEY}"}
+        url = f"{VESSEL_API_BASE}/vessel/{imo_number}?filter.idType=imo"
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            vessel = resp.json().get("vessel", {})
+            if vessel:
+                return {
+                    "success":     True,
+                    "name":        vessel.get("name", "Unknown"),
+                    "imo":         vessel.get("imo", imo_number),
+                    "dwt":         vessel.get("deadweight_tonnage", 0),
+                    "loa":         vessel.get("length", 0),
+                    "beam":        vessel.get("breadth", 0),
+                    "year_built":  vessel.get("year_built", 0),
+                    "flag":        vessel.get("country", ""),
+                    "vessel_type": vessel.get("vessel_type", ""),
+                    "owner":       vessel.get("owner_name", ""),
+                }
+        if resp.status_code == 404:
+            return {"success": False, "error": f"Vessel IMO {imo_number} not found in VesselAPI database."}
+        return {"success": False, "error": f"VesselAPI error: HTTP {resp.status_code}"}
+    except Exception as e:
+        return {"success": False, "error": f"Connection error: {str(e)}"}
+
+
+def fetch_bhsi_rate() -> dict:
+    """Fetch current BHSI daily rate from handybulk.com."""
+    try:
+        resp = requests.get(
+            "https://www.handybulk.com/baltic-dry-index/",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            text = resp.text
+            for pattern in [
+                r'BHSI[^$]*\$\s*([\d,]+)\s*per\s*day',
+                r'handysize[^$]*\$\s*([\d,]+)',
+                r'BHSI.*?(\d{1,2},\d{3})',
+            ]:
+                m = re.search(pattern, text, re.IGNORECASE)
+                if m:
+                    rate = int(m.group(1).replace(",", ""))
+                    if 3000 < rate < 50000:
+                        return {"success": True, "rate": rate,
+                                "source": "Baltic Handysize Index (handybulk.com)"}
+            return {"success": False, "error": "Could not parse BHSI rate. Use manual entry."}
+        return {"success": False, "error": f"HTTP {resp.status_code} from handybulk.com"}
+    except Exception as e:
+        return {"success": False, "error": f"Connection error: {str(e)}"}
+
+
+def fetch_bunker_prices() -> dict:
+    """Fetch LSFO and MGO prices from Ship & Bunker Singapore."""
+    try:
+        resp = requests.get(
+            "https://shipandbunker.com/prices/apac/sea/sg-sin-singapore",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            text = resp.text
+            result = {"success": True}
+            lm = re.search(r'VLSFO.*?\$?\s*(\d{3,4})', text, re.IGNORECASE)
+            mm = re.search(r'MGO.*?\$?\s*(\d{3,4})',   text, re.IGNORECASE)
+            if lm:
+                result["lsfo"] = int(lm.group(1))
+            if mm:
+                result["mgo"]  = int(mm.group(1))
+            if "lsfo" in result or "mgo" in result:
+                result["source"] = "Ship & Bunker Singapore"
+                return result
+            return {"success": False, "error": "Could not parse bunker prices. Use manual entry."}
+        return {"success": False, "error": f"HTTP {resp.status_code} from Ship & Bunker"}
+    except Exception as e:
+        return {"success": False, "error": f"Connection error: {str(e)}"}
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from modules.data_processor import (
@@ -28,6 +115,7 @@ from modules.simulation_engine import (
     cascade_recalculate_legs, FastLegLibrary, _find_leg_idx,
     HAS_NX,
 )
+from modules.sim_logger import build_simulation_log, write_simulation_log
 
 st.set_page_config(page_title="SEA Tramping Simulation V2", layout="wide", page_icon="🚢")
 
@@ -183,7 +271,7 @@ def export_programme_to_excel(prog, vessel_config, programme_rank):
         row = 4 + ri
         fill = alt_fill if ri % 2 == 0 else None
         g   = leg.get('gross_freight', leg.get('revenue', 0))
-        br  = leg.get('brokerage', g * 0.0375)
+        br  = leg.get('brokerage', g * (vessel_config.brokerage_pct if vessel_config else 0.0375))
         ni  = leg.get('net_income', g - br)
         lc  = leg.get('lsfo_cost', 0)
         mc  = leg.get('mgo_cost', 0)
@@ -347,42 +435,177 @@ if 'sim_requested' not in st.session_state:
 _sim_locked = st.session_state.get('sim_running', False)
 
 # ─── SIDEBAR ─────────────────────────────────────────────────────────────────
-st.sidebar.markdown("## 🚢 Vessel Configuration")
-dwt   = st.sidebar.number_input("Deadweight (DWT)", value=17556, min_value=5000, max_value=60000, step=500, disabled=_sim_locked)
-dwcc  = st.sidebar.number_input("Cargo Capacity (DWCC, MT)", value=15000, min_value=3000, max_value=55000, step=500, disabled=_sim_locked)
-speed_laden    = st.sidebar.number_input("Speed Laden (knots)",   value=11.0, min_value=8.0, max_value=16.0, step=0.5, disabled=_sim_locked)
-speed_ballast  = st.sidebar.number_input("Speed Ballast (knots)", value=11.5, min_value=8.0, max_value=16.0, step=0.5, disabled=_sim_locked)
 
-st.sidebar.markdown("## 💰 Cost Parameters")
-charter_hire = st.sidebar.number_input(
-    "Charter Hire (USD/day)", value=9000, min_value=3000, max_value=30000, step=500,
-    disabled=_sim_locked
-)
+# ── 🚢 Vessel Configuration ───────────────────────────────────────────────────
+st.sidebar.markdown("### 🚢 Vessel")
 
-_live = fetch_live_bunker_prices()
-_lsfo_default = int(_live['lsfo']) if _live and 'lsfo' in _live else 560
-_mgo_default  = int(_live['mgo'])  if _live and 'mgo'  in _live else 780
-_live_badge   = "🟢 Live price" if (_live and len(_live) >= 2) else "⚪ Using defaults"
-
-st.sidebar.markdown(f"**Bunker Prices** {_live_badge}")
-if _live and len(_live) >= 2:
-    st.sidebar.caption(
-        f"Live from Ship & Bunker Singapore: "
-        f"VLSFO ${_live.get('lsfo', '—')} | MGO ${_live.get('mgo', '—')}"
+# IMO Lookup row
+imo_col1, imo_col2 = st.sidebar.columns([3, 1])
+with imo_col1:
+    imo_input = st.text_input(
+        "IMO Number",
+        value=st.session_state.get("imo_number", ""),
+        placeholder="e.g. 9128805",
+        key="imo_input_field",
+        label_visibility="collapsed",
     )
-else:
-    st.sidebar.caption(
-        "Could not fetch live prices — using sidebar defaults. "
-        "Edit manually above."
+with imo_col2:
+    lookup_btn = st.button("🔍", key="imo_lookup_btn",
+                           help="Lookup vessel from VesselAPI")
+
+if lookup_btn and imo_input.strip():
+    with st.spinner("Looking up vessel..."):
+        _imo_result = fetch_vessel_from_imo(imo_input.strip())
+    if _imo_result["success"]:
+        st.session_state["imo_number"]  = imo_input.strip()
+        st.session_state["vessel_name"] = _imo_result["name"]
+        st.session_state["vessel_imo"]  = _imo_result["imo"]
+        st.session_state["api_dwt"]     = float(_imo_result["dwt"])
+        st.session_state["api_loa"]     = float(_imo_result["loa"])
+        st.session_state["api_beam"]    = float(_imo_result["beam"])
+        st.session_state["api_year"]    = _imo_result["year_built"]
+        st.session_state["api_flag"]    = _imo_result["flag"]
+        st.sidebar.success(
+            f"✓ {_imo_result['name']} ({_imo_result['flag']}) "
+            f"— {_imo_result['dwt']:,} DWT"
+        )
+    else:
+        st.sidebar.error(_imo_result["error"])
+
+if st.session_state.get("vessel_name"):
+    st.sidebar.markdown(
+        f"<div style='font-size:11px;color:#64748b;margin-bottom:4px'>"
+        f"✓ {st.session_state['vessel_name']} | "
+        f"IMO {st.session_state.get('vessel_imo','')} | "
+        f"{st.session_state.get('api_flag','')}</div>",
+        unsafe_allow_html=True,
     )
-lsfo_price = st.sidebar.number_input(
-    "LSFO / VLSFO Price (USD/MT)", value=_lsfo_default, min_value=200, max_value=1200, step=10,
-    disabled=_sim_locked
+
+dwt_val = st.sidebar.number_input(
+    "DWT (MT)",
+    min_value=5000, max_value=50000,
+    value=int(st.session_state.get("api_dwt", 17556)),
+    step=100, key="vessel_dwt", disabled=_sim_locked,
 )
-mgo_price = st.sidebar.number_input(
-    "MGO Price (USD/MT)", value=_mgo_default, min_value=300, max_value=1500, step=10,
-    disabled=_sim_locked
+dwcc_val = st.sidebar.number_input(
+    "DWCC / Cargo capacity (MT)",
+    min_value=3000, max_value=45000,
+    value=int(st.session_state.get("vessel_dwcc_override", dwt_val * 85 // 100)),
+    step=100, key="vessel_dwcc", disabled=_sim_locked,
+    help="Deadweight cargo capacity — typically ~85% of DWT",
 )
+
+loa_col, beam_col = st.sidebar.columns(2)
+with loa_col:
+    loa_val = st.number_input(
+        "LOA (m)", min_value=50, max_value=400,
+        value=int(st.session_state.get("api_loa", 150)),
+        step=1, key="vessel_loa", disabled=_sim_locked,
+    )
+with beam_col:
+    beam_val = st.number_input(
+        "Beam (m)", min_value=10, max_value=60,
+        value=int(st.session_state.get("api_beam", 24)),
+        step=1, key="vessel_beam", disabled=_sim_locked,
+    )
+
+draft_col1, draft_col2 = st.sidebar.columns(2)
+with draft_col1:
+    draft_laden = st.number_input(
+        "Draft laden (m)", min_value=3.0, max_value=20.0,
+        value=float(st.session_state.get("vessel_draft_laden", 9.5)),
+        step=0.1, key="vessel_draft_laden_input", disabled=_sim_locked,
+    )
+with draft_col2:
+    draft_ballast = st.number_input(
+        "Draft ballast (m)", min_value=2.0, max_value=15.0,
+        value=float(st.session_state.get("vessel_draft_ballast", 5.5)),
+        step=0.1, key="vessel_draft_ballast_input", disabled=_sim_locked,
+    )
+
+spd_col1, spd_col2 = st.sidebar.columns(2)
+with spd_col1:
+    speed_laden = st.number_input(
+        "Speed laden (kn)", min_value=6.0, max_value=20.0,
+        value=11.0, step=0.5,
+        key="vessel_speed_laden", disabled=_sim_locked,
+    )
+with spd_col2:
+    speed_ballast = st.number_input(
+        "Speed ballast (kn)", min_value=6.0, max_value=20.0,
+        value=11.5, step=0.5,
+        key="vessel_speed_ballast", disabled=_sim_locked,
+    )
+
+# ── 💰 Market Rates ───────────────────────────────────────────────────────────
+st.sidebar.markdown("### 💰 Market Rates")
+
+# Charter hire — with BHSI live fetch button
+hire_col1, hire_col2 = st.sidebar.columns([3, 1])
+with hire_col1:
+    charter_hire = st.number_input(
+        "Charter hire ($/day)",
+        min_value=1000, max_value=100000,
+        value=int(st.session_state.get("charter_hire_rate", 9000)),
+        step=100, key="charter_hire_input",
+        label_visibility="collapsed", disabled=_sim_locked,
+    )
+with hire_col2:
+    bhsi_btn = st.button("🔄", key="bhsi_fetch_btn",
+                         help="Fetch live BHSI rate")
+
+if bhsi_btn:
+    with st.spinner("Fetching BHSI..."):
+        _bhsi = fetch_bhsi_rate()
+    if _bhsi["success"]:
+        st.session_state["charter_hire_rate"] = _bhsi["rate"]
+        st.sidebar.success(f"BHSI: ${_bhsi['rate']:,}/day")
+        st.rerun()
+    else:
+        st.sidebar.warning(f"BHSI fetch failed: {_bhsi['error']}")
+
+st.sidebar.caption(f"Charter hire: ${charter_hire:,}/day | Source: BHSI")
+
+# Bunker prices — with live fetch button
+st.sidebar.markdown("**Bunker prices ($/MT)**")
+bunk_col1, bunk_col2, bunk_col3 = st.sidebar.columns([2, 2, 1])
+with bunk_col1:
+    lsfo_price = st.number_input(
+        "LSFO", min_value=100, max_value=2000,
+        value=int(st.session_state.get("lsfo_price", 560)),
+        step=5, key="lsfo_input",
+        label_visibility="collapsed", disabled=_sim_locked,
+    )
+    st.sidebar.caption("LSFO")
+with bunk_col2:
+    mgo_price = st.number_input(
+        "MGO", min_value=100, max_value=2500,
+        value=int(st.session_state.get("mgo_price", 780)),
+        step=5, key="mgo_input",
+        label_visibility="collapsed", disabled=_sim_locked,
+    )
+    st.sidebar.caption("MGO")
+with bunk_col3:
+    bunker_btn = st.button("🔄", key="bunker_fetch_btn",
+                           help="Fetch live bunker prices — Singapore")
+
+if bunker_btn:
+    with st.spinner("Fetching bunker prices..."):
+        _bunk = fetch_bunker_prices()
+    if _bunk["success"]:
+        if "lsfo" in _bunk:
+            st.session_state["lsfo_price"] = _bunk["lsfo"]
+        if "mgo" in _bunk:
+            st.session_state["mgo_price"] = _bunk["mgo"]
+        st.sidebar.success(
+            f"Updated: LSFO ${_bunk.get('lsfo','?')} | MGO ${_bunk.get('mgo','?')}"
+        )
+        st.rerun()
+    else:
+        st.sidebar.warning(f"Bunker fetch failed: {_bunk['error']}")
+
+# Remaining cost parameters (kept as-is)
+st.sidebar.markdown("## 💰 Other Costs")
 insurance_annual  = st.sidebar.number_input("Insurance (USD/year)",   value=16000, min_value=5000,  max_value=100000, step=1000, disabled=_sim_locked)
 brokerage_pct_ui  = st.sidebar.number_input("Brokerage (%)",          value=3.75,  min_value=0.0,   max_value=10.0,   step=0.25, disabled=_sim_locked)
 operating_days    = st.sidebar.number_input("Operating Days/Year",     value=330,   min_value=270,   max_value=365,    step=5,    disabled=_sim_locked)
@@ -429,7 +652,7 @@ st.sidebar.markdown("## 🚀 Simulation")
 algo_choice = st.sidebar.selectbox(
     "Algorithm",
     ["Hybrid (Greedy + Monte Carlo)", "Monte Carlo Only", "Greedy + Local Search"],
-    index=0,
+    index=1,
     key='algo_choice_sidebar',
     disabled=_sim_locked,
 )
@@ -527,6 +750,27 @@ else:
         unsafe_allow_html=True
     )
 
+st.sidebar.markdown(
+    "<div style='font-size:11px;font-weight:600;color:#64748b;"
+    "margin-top:8px;margin-bottom:2px'>Reproducibility</div>",
+    unsafe_allow_html=True
+)
+fixed_seed_on = st.sidebar.checkbox(
+    "Fixed seed (reproducible results)",
+    value=False,
+    key="fixed_seed_checkbox",
+    disabled=_sim_locked,
+)
+if fixed_seed_on:
+    seed_value = st.sidebar.number_input(
+        "Seed number", min_value=0, max_value=999999, value=42,
+        step=1, key="fixed_seed_value", disabled=_sim_locked,
+    )
+    st.sidebar.caption("Fixed seed: results will be identical each run.")
+else:
+    seed_value = None
+    st.sidebar.caption("Random seed: each run explores different programmes.")
+
 st.sidebar.markdown("<br>", unsafe_allow_html=True)
 if _sim_locked:
     st.sidebar.markdown(
@@ -577,6 +821,7 @@ tabs = st.tabs([
     "📉 Sensitivity",
     "🗺️ Voyage Analysis",
     "🚢 Voyage Journey",
+    "⚓ Port Validation",
 ])
 
 # ─── TAB 1: NETWORK & DATA (merged) ──────────────────────────────────────────
@@ -584,6 +829,25 @@ with tabs[0]:
     if os.path.exists(DATA_PATH):
         with st.spinner("Loading data..."):
             intra, ports, dist_matrix, legs = load_data(DATA_PATH)
+
+        # ── Sea distance matrix status ────────────────────────────────────
+        try:
+            from data.sea_distances_loader import _DISTANCE_MATRIX, is_loaded as _sea_is_loaded
+            if _sea_is_loaded():
+                _n_ports_sea = len(_DISTANCE_MATRIX)
+                _n_routes_sea = sum(len(v) for v in _DISTANCE_MATRIX.values())
+                st.success(
+                    f"Real sea distance matrix loaded — "
+                    f"{_n_ports_sea} ports, {_n_routes_sea:,} routes "
+                    f"(searoute EU maritime routing network)"
+                )
+            else:
+                st.warning(
+                    "Sea distance matrix not found — using Haversine approximation. "
+                    "Run `python data/build_distance_matrix.py` to build it (one-time, ~10 min)."
+                )
+        except ImportError:
+            pass
 
         # ── Top metrics row ───────────────────────────────────────────────
         m1, m2, m3, m4 = st.columns(4)
@@ -683,7 +947,7 @@ with tabs[0]:
             st.markdown("### Network Graph Analysis")
             with st.spinner("Building voyage graph..."):
                 vessel_for_graph = VesselConfig(
-                    dwt=dwt, dwcc=dwcc,
+                    dwt=dwt_val, dwcc=dwcc_val,
                     speed_laden_knots=speed_laden,
                     speed_ballast_knots=speed_ballast,
                     charter_hire_day=charter_hire,
@@ -805,6 +1069,11 @@ with tabs[1]:
     <div class="kpi-val kpi-{_var_col}">${_var_val:,.0f}</div>
     <div class="kpi-lbl">Value at Risk (P5)</div>
     <div class="kpi-del">Worst 5% scenario</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-val" style="color:#fbbf24">{analysis['top_programmes'][0].get('ballast_ratio', 0)*100:.0f}%</div>
+    <div class="kpi-lbl">Ballast Ratio (best prog)</div>
+    <div class="kpi-del" style="color:#fca5a5">-${analysis['top_programmes'][0].get('ballast_cost_total', 0):,.0f} empty cost</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -1103,6 +1372,24 @@ with tabs[1]:
                          barmode='group', title="Profit by Simulation Phase")
             fig.update_layout(height=400)
             st.plotly_chart(fig, use_container_width=True)
+
+        # ── Diagnostic log viewer ─────────────────────────────────────────
+        st.markdown("---")
+        _log_txt = st.session_state.get('sim_log', '')
+        _log_pth = st.session_state.get('sim_log_path', '')
+        with st.expander("📋 View Simulation Log", expanded=False):
+            if _log_txt:
+                if _log_pth:
+                    st.caption(f"Log file: `{_log_pth}`")
+                st.code(_log_txt, language=None)
+                st.download_button(
+                    label="⬇️ Download simulation_log.txt",
+                    data=_log_txt,
+                    file_name="simulation_log.txt",
+                    mime="text/plain",
+                )
+            else:
+                st.info("No log available — run the simulation to generate a log.")
     else:
         st.info("Run the simulation first.")
 
@@ -1393,7 +1680,7 @@ with tabs[3]:
                 new_hire    = 0.0
                 for leg in legs:
                     gross = leg.get('gross_freight', leg.get('revenue', 0)) * f_mult
-                    brok  = gross * 0.0375
+                    brok  = gross * (brokerage_pct_ui / 100.0)
                     ni    = gross - brok
                     bunk  = leg.get('bunker_cost', 0) * b_mult
                     hire  = leg.get('charter_hire', leg.get('charter_hire_cost', 0)) * h_mult
@@ -1419,7 +1706,7 @@ with tabs[3]:
             profit_delta_pct = (profit_delta / abs(base_profit)) * 100 if base_profit != 0 else 0
             total_days   = sum(l.get('total_days', 0) for l in legs_base)
             new_tce = (
-                result['revenue'] * (1 - 0.0375)
+                result['revenue'] * (1 - brokerage_pct_ui / 100.0)
                 - result['bunker']
                 - sum(l.get('port_costs', 0) for l in legs_base)
                 - sum(l.get('insurance', 0) for l in legs_base)
@@ -1515,7 +1802,7 @@ if run_simulation_clicked and os.path.exists(DATA_PATH):
     intra, ports, dist_matrix, legs = load_data(DATA_PATH)
 
     vessel = VesselConfig(
-        dwt=dwt, dwcc=dwcc,
+        dwt=dwt_val, dwcc=dwcc_val,
         speed_laden_knots=speed_laden,
         speed_ballast_knots=speed_ballast,
         charter_hire_day=charter_hire,
@@ -1527,13 +1814,17 @@ if run_simulation_clicked and os.path.exists(DATA_PATH):
         fuel_laden_mt_day=13.5,
         fuel_ballast_mt_day=13.5,
         bunker_price_mt=lsfo_price,
+        draft_laden=draft_laden,
+        draft_ballast=draft_ballast,
+        loa=float(loa_val),
+        beam=float(beam_val),
     )
     sim_config = SimConfig(
         n_iterations=n_iterations,
         algorithm=_algo_map[algo_choice],
         freight_volatility=freight_vol,
         bunker_volatility=bunker_vol,
-        random_seed=seed_value if 'seed_value' in dir() else None,
+        random_seed=seed_value,
         dist_type='triangular' if _use_triangular else 'normal',
         freight_min=freight_min,   freight_mode=freight_mode,
         freight_max=freight_max,
@@ -1761,6 +2052,26 @@ if run_simulation_clicked and os.path.exists(DATA_PATH):
         )
 
         analysis = analyse_results(results, ports)
+
+        # ── Write diagnostic log ──────────────────────────────────────────
+        try:
+            import modules.data_processor as _dp
+            _log_text = build_simulation_log(
+                elapsed=elapsed,
+                sim_config=sim_config,
+                vessel=vessel,
+                algo_display=algo_choice,
+                legs_df=legs,
+                analysis=analysis,
+                filter_stats=_dp._FILTER_STATS,
+            )
+            _log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "simulation_log.txt")
+            write_simulation_log(_log_text, _log_path)
+            st.session_state['sim_log']      = _log_text
+            st.session_state['sim_log_path'] = _log_path
+        except Exception as _log_err:
+            st.session_state['sim_log'] = f"Log generation failed: {_log_err}"
+
         st.session_state['results']     = results
         st.session_state['analysis']    = analysis
         st.session_state['elapsed']     = elapsed
@@ -1850,6 +2161,29 @@ with tabs[4]:
                 lats.append(_math.degrees(_math.atan2(z, _math.sqrt(x*x + y*y))))
                 lons.append(_math.degrees(_math.atan2(y, x)))
             return lats, lons
+
+        def _get_route_lats_lons(port_a, port_b, p_coords):
+            """
+            Return (lats, lons) for the sea route between two ports.
+            Uses real searoute waypoints when available; falls back to
+            geodesic arc so existing rendering is never broken.
+            """
+            try:
+                from data.sea_distances_loader import get_sea_route_coords
+                waypoints = get_sea_route_coords(port_a, port_b)
+                if waypoints and len(waypoints) > 2:
+                    # waypoints are [lon, lat] — unzip to separate lists
+                    lons = [w[0] for w in waypoints]
+                    lats = [w[1] for w in waypoints]
+                    return lats, lons
+            except Exception:
+                pass
+            # Fallback: geodesic arc
+            if port_a in p_coords and port_b in p_coords:
+                la1, lo1 = p_coords[port_a]
+                la2, lo2 = p_coords[port_b]
+                return _geodesic(la1, lo1, la2, lo2)
+            return [], []
 
         # ── Programme selector header ─────────────────────────────────────
         hcol1, hcol2, hcol3 = st.columns([3, 1, 1])
@@ -2010,6 +2344,51 @@ with tabs[4]:
                 unsafe_allow_html=True
             )
 
+            # ── Cargo intelligence badges ──────────────────────────────
+            _ci_badges = []
+            _hold_switch  = sel_leg.get('hold_switch', '')
+            _cleaning_cost = sel_leg.get('cleaning_cost', 0)
+            _cleaning_days = sel_leg.get('cleaning_days', 0.0)
+            _seasonal_f   = sel_leg.get('seasonal_factor', 1.0)
+            _sim_month    = sel_leg.get('sim_month', 1)
+            _month_name   = ["Jan","Feb","Mar","Apr","May","Jun",
+                             "Jul","Aug","Sep","Oct","Nov","Dec"][max(0, _sim_month - 1)]
+
+            if _hold_switch and _cleaning_cost > 0:
+                try:
+                    from data.cargo_intelligence import get_cleaning_cost as _gcc
+                    _prev_c = _hold_switch.split(' -> ')[0] if ' -> ' in _hold_switch else ''
+                    _next_c = sel_leg.get('commodity', '')
+                    _grade  = _gcc(_prev_c, _next_c).get('grade', 'G')
+                except Exception:
+                    _grade = 'G'
+                _gc = {"G":"#dcfce7","W":"#fef3c7","S":"#fee2e2","X":"#fee2e2"}.get(_grade,"#e6f1fb")
+                _tc = {"G":"#166534","W":"#92400e","S":"#991b1b","X":"#991b1b"}.get(_grade,"#0c447c")
+                _ci_badges.append(
+                    f"<span style='background:{_gc};color:{_tc};"
+                    f"font-size:10px;padding:2px 8px;border-radius:8px;white-space:nowrap'>"
+                    f"Hold clean: {_hold_switch} | Grade {_grade} | "
+                    f"{_cleaning_days:.1f}d | ${_cleaning_cost:,.0f}</span>"
+                )
+
+            if abs(_seasonal_f - 1.0) >= 0.01:
+                _sf_bg  = "#dcfce7" if _seasonal_f >= 1.0 else "#fee2e2"
+                _sf_tc  = "#166534" if _seasonal_f >= 1.0 else "#991b1b"
+                _sf_sym = "+" if _seasonal_f >= 1.0 else ""
+                _ci_badges.append(
+                    f"<span style='background:{_sf_bg};color:{_sf_tc};"
+                    f"font-size:10px;padding:2px 8px;border-radius:8px;white-space:nowrap'>"
+                    f"Seasonal {_month_name}: ×{_seasonal_f:.2f} "
+                    f"({_sf_sym}{(_seasonal_f-1)*100:.0f}%)</span>"
+                )
+
+            if _ci_badges:
+                st.markdown(
+                    "<div style='display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px'>"
+                    + "".join(_ci_badges) + "</div>",
+                    unsafe_allow_html=True
+                )
+
             cc1, cc2, cc3 = st.columns(3)
 
             # ── Card 1: Ports ──────────────────────────────────────────
@@ -2121,24 +2500,21 @@ with tabs[4]:
                 _spd_l_default = vessel.speed_laden_knots   if vessel else 11.0
                 _spd_b_default = vessel.speed_ballast_knots if vessel else 11.5
 
-                # Speed inputs — editable per voyage
-                spd_col1, spd_col2 = st.columns(2)
-                with spd_col1:
-                    spd_l = st.number_input(
-                        "Laden speed (kn)",
-                        value=float(_spd_l_default),
-                        min_value=6.0, max_value=18.0, step=0.5,
-                        key=f'va_spdl_{sel_prog_idx}_{sel_idx}',
-                        help="Vessel speed when loaded"
-                    )
-                with spd_col2:
-                    spd_b = st.number_input(
-                        "Ballast speed (kn)",
-                        value=float(_spd_b_default),
-                        min_value=6.0, max_value=18.0, step=0.5,
-                        key=f'va_spdb_{sel_prog_idx}_{sel_idx}',
-                        help="Vessel speed when empty"
-                    )
+                # Speed inputs — editable per voyage (sequential, no nested columns)
+                spd_l = st.number_input(
+                    "Laden speed (kn)",
+                    value=float(_spd_l_default),
+                    min_value=6.0, max_value=18.0, step=0.5,
+                    key=f'va_spdl_{sel_prog_idx}_{sel_idx}',
+                    help="Vessel speed when loaded"
+                )
+                spd_b = st.number_input(
+                    "Ballast speed (kn)",
+                    value=float(_spd_b_default),
+                    min_value=6.0, max_value=18.0, step=0.5,
+                    key=f'va_spdb_{sel_prog_idx}_{sel_idx}',
+                    help="Vessel speed when empty"
+                )
 
                 laden_nm = st.number_input(
                     _laden_label,
@@ -2199,7 +2575,7 @@ with tabs[4]:
                     key=f'va_rate_{sel_prog_idx}_{sel_idx}_{new_comm}',
                 )
                 gross_c = new_cargo * new_rate
-                ni_c    = gross_c * (1 - 0.0375)
+                ni_c    = gross_c * (1 - (vessel.brokerage_pct if vessel else 0.0375))
                 st.markdown(
                     f"<div style='background:#f8fafc;border:0.5px solid "
                     f"#e2e8f0;border-radius:6px;padding:6px 8px;margin-top:4px'>"
@@ -2320,10 +2696,46 @@ with tabs[4]:
                 st.markdown(
                     "<div style='font-size:10px;font-weight:600;color:#64748b;"
                     "text-transform:uppercase;letter-spacing:.06em;"
-                    "margin-bottom:8px'>P&amp;L breakdown</div>",
+                    "margin-bottom:8px'>P&amp;L breakdown — two phases</div>",
                     unsafe_allow_html=True
                 )
-                pl_items_va = [
+
+                # ── Pull phase data (prefer computed_va, fall back to sel_leg) ──
+                _src = computed_va if computed_va else sel_leg
+                _bp = _src.get('ballast_phase', sel_leg.get('ballast_phase', {}))
+                _lp = _src.get('laden_phase',   sel_leg.get('laden_phase', {}))
+
+                b_nm_va   = _bp.get('nm',   _v_va('ballast_nm', sel_leg.get('ballast_distance_nm', 0)))
+                b_days_va = _bp.get('days', _v_va('ballast_days', 0))
+                b_hire_va = _bp.get('charter_cost', 0)
+                b_bunk_va = _bp.get('bunker_cost',  0)
+                b_cost_va = _bp.get('total_cost',   b_hire_va + b_bunk_va)
+
+                l_nm_va   = _lp.get('nm',   _v_va('laden_nm', sel_leg.get('distance_nm', 0)))
+                l_days_va = _lp.get('days', _v_va('laden_days', 0))
+
+                # Phase 1 rows
+                ph1_rows = [
+                    ("Charter hire",  -b_hire_va, False),
+                    ("Bunker (LSFO)", -b_bunk_va, False),
+                    ("Revenue",        0,          False),
+                    ("Phase 1 total", -b_cost_va, True),
+                ]
+                ph1_html = ""
+                for _lbl, _val, _sub in ph1_rows:
+                    _vc  = "#991b1b" if _val < 0 else "#64748b" if _val == 0 else "#166534"
+                    _fw  = "600" if _sub else "400"
+                    _bdr = "border-top:0.5px solid #e2e8f0;padding-top:4px;" if _sub else ""
+                    _txt = "$0" if _val == 0 else f"{'+'if _val>0 else ''}${abs(_val):,.0f}"
+                    ph1_html += (
+                        f"<tr style='{_bdr}'>"
+                        f"<td style='padding:2px 0;font-size:11px;color:#475569;font-weight:{_fw}'>{_lbl}</td>"
+                        f"<td style='text-align:right;font-size:11px;color:{_vc};font-weight:{_fw}'>{_txt}</td>"
+                        f"</tr>"
+                    )
+
+                # Phase 2 rows (use existing _v_va values)
+                ph2_items = [
                     ("Gross freight",      g_va,              False, False),
                     ("Brokerage (3.75%)", -br_va,             True,  False),
                     ("Net income",         ni_va,             False, True),
@@ -2335,51 +2747,55 @@ with tabs[4]:
                     ("Insurance + other", -(ins_va + oth_va), True,  False),
                     ("Total expenses",    -exp_va,            True,  True),
                 ]
-                rows_html_va = ""
-                for lbl_va, val_va, is_cost_va, is_sub_va in pl_items_va:
-                    vc_va = (
-                        "#166534" if val_va > 0 and not is_cost_va
-                        else "#991b1b" if val_va < 0
-                        else "#1a3a5c"
+                ph2_html = ""
+                for _lbl2, _val2, _cost2, _sub2 in ph2_items:
+                    _vc2  = "#166534" if _val2 > 0 and not _cost2 else "#991b1b" if _val2 < 0 else "#1a3a5c"
+                    _fw2  = "600" if _sub2 else "400"
+                    _bdr2 = "border-top:0.5px solid #e2e8f0;padding-top:4px;" if _sub2 else ""
+                    ph2_html += (
+                        f"<tr style='{_bdr2}'>"
+                        f"<td style='padding:2px 0;font-size:11px;color:#475569;font-weight:{_fw2}'>{_lbl2}</td>"
+                        f"<td style='text-align:right;font-size:11px;color:{_vc2};font-weight:{_fw2}'>"
+                        f"{'+'if _val2>0 else ''}${abs(_val2):,.0f}</td></tr>"
                     )
-                    fw_va  = "600" if is_sub_va else "400"
-                    bdr_va = (
-                        "border-top:0.5px solid #e2e8f0;padding-top:4px;"
-                        if is_sub_va else ""
-                    )
-                    sg_va = "+" if val_va > 0 else ""
-                    rows_html_va += (
-                        f"<tr style='{bdr_va}'>"
-                        f"<td style='padding:2px 0;font-size:11px;"
-                        f"color:#475569;font-weight:{fw_va}'>{lbl_va}</td>"
-                        f"<td style='text-align:right;font-size:11px;"
-                        f"color:{vc_va};font-weight:{fw_va}'>"
-                        f"{sg_va}${abs(val_va):,.0f}</td></tr>"
-                    )
-                pl_c_va = "#166534" if pl_va >= 0 else "#991b1b"
-                vs_c_va = "#166534" if vs_avg_va >= 0 else "#991b1b"
-                vs_s_va = "+" if vs_avg_va >= 0 else ""
+
+                pl_c_va  = "#166534" if pl_va >= 0 else "#991b1b"
+                vs_c_va  = "#166534" if vs_avg_va >= 0 else "#991b1b"
+                vs_s_va  = "+" if vs_avg_va >= 0 else ""
+                _br_pct  = b_days_va / max(td_va, 1) * 100
+
                 st.markdown(
+                    # Phase 1 header
+                    f"<div style='background:#FEF3C7;border-left:3px solid #F59E0B;"
+                    f"border-radius:0 6px 6px 0;padding:5px 8px;margin-bottom:4px'>"
+                    f"<span style='font-size:11px;font-weight:600;color:#92400E'>"
+                    f"Phase 1 — Ballast (empty)</span>"
+                    f"<span style='float:right;font-size:10px;color:#92400E'>"
+                    f"{b_nm_va:,.0f} NM · {b_days_va:.1f} d</span></div>"
                     f"<table style='width:100%;border-collapse:collapse'>"
-                    f"{rows_html_va}"
+                    f"{ph1_html}</table>"
+                    # Phase 2 header
+                    f"<div style='background:#DCFCE7;border-left:3px solid #22C55E;"
+                    f"border-radius:0 6px 6px 0;padding:5px 8px;margin:8px 0 4px 0'>"
+                    f"<span style='font-size:11px;font-weight:600;color:#166534'>"
+                    f"Phase 2 — Laden (loaded)</span>"
+                    f"<span style='float:right;font-size:10px;color:#166534'>"
+                    f"{l_nm_va:,.0f} NM · {l_days_va:.1f} d</span></div>"
+                    f"<table style='width:100%;border-collapse:collapse'>"
+                    f"{ph2_html}"
+                    # Net total footer
                     f"<tr style='border-top:2px solid #1a3a5c'>"
-                    f"<td style='padding:4px 0;font-size:13px;"
-                    f"font-weight:700;color:#1a3a5c'>Net profit / loss</td>"
-                    f"<td style='text-align:right;font-size:15px;"
-                    f"font-weight:700;color:{pl_c_va}'>"
+                    f"<td style='padding:4px 0;font-size:13px;font-weight:700;color:#1a3a5c'>Net voyage profit</td>"
+                    f"<td style='text-align:right;font-size:15px;font-weight:700;color:{pl_c_va}'>"
                     f"{'+'if pl_va>=0 else ''}${pl_va:,.0f}</td></tr>"
-                    f"<tr><td style='font-size:10px;color:#94a3b8;padding:2px 0'>"
-                    f"TCE this voyage</td>"
-                    f"<td style='text-align:right;font-size:10px;"
-                    f"color:#475569'>${ppd_va:,.0f}/day</td></tr>"
-                    f"<tr><td style='font-size:10px;color:#94a3b8'>"
-                    f"vs programme avg</td>"
-                    f"<td style='text-align:right;font-size:10px;"
-                    f"color:{vs_c_va}'>{vs_s_va}${vs_avg_va:,.0f}/day</td></tr>"
-                    f"<tr><td style='font-size:10px;color:#94a3b8'>"
-                    f"Total voyage days</td>"
-                    f"<td style='text-align:right;font-size:10px;"
-                    f"color:#475569'>{td_va:.1f} days</td></tr>"
+                    f"<tr><td style='font-size:10px;color:#94a3b8;padding:2px 0'>TCE this voyage</td>"
+                    f"<td style='text-align:right;font-size:10px;color:#475569'>${ppd_va:,.0f}/day</td></tr>"
+                    f"<tr><td style='font-size:10px;color:#94a3b8'>vs programme avg</td>"
+                    f"<td style='text-align:right;font-size:10px;color:{vs_c_va}'>{vs_s_va}${vs_avg_va:,.0f}/day</td></tr>"
+                    f"<tr><td style='font-size:10px;color:#94a3b8'>Ballast ratio</td>"
+                    f"<td style='text-align:right;font-size:10px;color:#92400E'>{_br_pct:.0f}% empty</td></tr>"
+                    f"<tr><td style='font-size:10px;color:#94a3b8'>Total voyage days</td>"
+                    f"<td style='text-align:right;font-size:10px;color:#475569'>{td_va:.1f} days</td></tr>"
                     f"</table>",
                     unsafe_allow_html=True
                 )
@@ -2463,9 +2879,12 @@ with tabs[4]:
             prev_dest_va = legs_list[sel_idx-1].get('dest_port', '')
             if (prev_dest_va in port_coords_va
                     and new_load in port_coords_va):
-                bl, blo   = port_coords_va[prev_dest_va]
-                ll2, llo2 = port_coords_va[new_load]
-                b_lats, b_lons = _geodesic(bl, blo, ll2, llo2)
+                b_lats, b_lons = _get_route_lats_lons(
+                    prev_dest_va, new_load, port_coords_va
+                )
+                if not b_lats:
+                    b_lats, b_lons = [port_coords_va[prev_dest_va][0], port_coords_va[new_load][0]], \
+                                     [port_coords_va[prev_dest_va][1], port_coords_va[new_load][1]]
                 map_traces_va.append(go.Scattermap(
                     lat=b_lats, lon=b_lons, mode='lines',
                     line=dict(width=2, color='#94a3b8'),
@@ -2484,9 +2903,9 @@ with tabs[4]:
 
         # Laden leg — main route arc
         if new_load in port_coords_va and new_disch in port_coords_va:
-            ll_va, llo_va  = port_coords_va[new_load]
-            dl_va, dlo_va  = port_coords_va[new_disch]
-            l_lats, l_lons = _geodesic(ll_va, llo_va, dl_va, dlo_va)
+            l_lats, l_lons = _get_route_lats_lons(
+                new_load, new_disch, port_coords_va
+            )
             route_col_va   = '#f59e0b' if pl_va >= 0 else '#ef4444'
 
             map_traces_va.append(go.Scattermap(
@@ -2645,6 +3064,7 @@ with tabs[5]:
         port_country_vj = dict(zip(ports_vj['Port'], ports_vj['Country']))
 
         from data.port_charges import PORT_CHARGES, PORT_CHARGES_DEFAULT
+        from data.sea_distances_loader import get_sea_route_coords
 
         def _get_meta_vj(pname):
             pc = PORT_CHARGES.get(pname, PORT_CHARGES_DEFAULT)
@@ -2701,6 +3121,26 @@ with tabs[5]:
                     z, _math.sqrt(x*x + y*y))))
                 lons.append(_math.degrees(_math.atan2(y, x)))
             return lats, lons
+
+        def _get_sea_route_lats_lons_vj(port_a, port_b, p_coords):
+            """
+            Return (lats, lons) for sea route between two ports.
+            Uses real Searoute waypoints if available; falls back to geodesic arc.
+            """
+            try:
+                waypoints = get_sea_route_coords(port_a, port_b)
+                if waypoints and len(waypoints) > 2:
+                    lons = [w[0] for w in waypoints]
+                    lats = [w[1] for w in waypoints]
+                    return lats, lons
+            except Exception:
+                pass
+            # Fallback to geodesic arc
+            if port_a in p_coords and port_b in p_coords:
+                la1, lo1 = p_coords[port_a]
+                la2, lo2 = p_coords[port_b]
+                return _geodesic_vj(la1, lo1, la2, lo2)
+            return [], []
 
         # ── Programme selector ────────────────────────────────────────
         hc1, hc2, hc3 = st.columns([3, 1, 1])
@@ -2827,10 +3267,7 @@ with tabs[5]:
             op = leg.get('origin_port','')
             dp = leg.get('dest_port','')
             pl = leg.get('profit_loss', leg.get('profit',0))
-            if op in port_coords_vj and dp in port_coords_vj:
-                lats2,lons2 = _geo2(*port_coords_vj[op], *port_coords_vj[dp])
-            else:
-                lats2,lons2 = [],[]
+            lats2, lons2 = _get_sea_route_lats_lons_vj(op, dp, port_coords_vj)
             voyage_data_vj.append({
                 'from':  op,
                 'to':    dp,
@@ -3186,4 +3623,126 @@ renderFrame(0);
 </script></body></html>
 """
         components.html(html_vj, height=920, scrolling=False)
+
+# ─── TAB 7: PORT VALIDATION ──────────────────────────────────────────────────
+with tabs[6]:
+    st.markdown("### ⚓ Port Validation Report")
+    st.markdown(
+        "Shows all database ports filtered against vessel physical dimensions. "
+        "Every access decision is shown for full transparency."
+    )
+
+    from data.port_restrictions import PORT_SUITABILITY, NOT_SUITABLE_PORTS, RESTRICTED_PORTS
+
+    _pv_vessel = st.session_state.get('vessel')
+    vessel_draft   = _pv_vessel.draft_laden   if _pv_vessel else 9.5
+    vessel_draft_b = _pv_vessel.draft_ballast if _pv_vessel else 5.5
+    vessel_loa     = _pv_vessel.loa           if _pv_vessel else 150.0
+    vessel_beam    = _pv_vessel.beam          if _pv_vessel else 24.0
+
+    # Summary funnel metrics
+    total_db   = 769
+    sea_region = 366
+    accessible = sum(1 for v in PORT_SUITABILITY.values()
+                     if v["status"] in ("EXCELLENT", "GOOD"))
+    restricted = sum(1 for v in PORT_SUITABILITY.values()
+                     if v["status"] == "RESTRICTED")
+    blocked    = sum(1 for v in PORT_SUITABILITY.values()
+                     if v["status"] == "NOT_SUITABLE")
+
+    pvc1, pvc2, pvc3, pvc4, pvc5 = st.columns(5)
+    pvc1.metric("Total database",  total_db,
+                help="All SEA + Far East ports in restriction database")
+    pvc2.metric("SEA region",      sea_region,
+                help="After removing China, Japan, Korea")
+    pvc3.metric("✅ Active",        accessible,
+                help="EXCELLENT + GOOD — vessel enters fully laden")
+    pvc4.metric("⚠️ Restricted",   restricted,
+                help="Conditional entry — tidal, draft limits")
+    pvc5.metric("❌ Eliminated",    blocked,
+                help="Vessel cannot enter under any condition")
+
+    st.markdown("---")
+
+    pv_sf, pv_nf = st.columns([1, 2])
+    with pv_sf:
+        status_filter = st.selectbox(
+            "Filter by status",
+            ["All", "✅ EXCELLENT", "🔵 GOOD", "⚠️ RESTRICTED", "❌ NOT SUITABLE"],
+            key="pv_status_filter",
+        )
+    with pv_nf:
+        country_filter = st.text_input(
+            "Search port name", key="pv_country_filter",
+            placeholder="e.g. Samarinda, Bangkok, Phnom Penh…"
+        )
+
+    # Build table rows
+    _status_map = {
+        "EXCELLENT":    "✅ EXCELLENT",
+        "GOOD":         "🔵 GOOD",
+        "RESTRICTED":   "⚠️ RESTRICTED",
+        "NOT_SUITABLE": "❌ BLOCKED",
+    }
+    _filter_map = {
+        "✅ EXCELLENT":   "EXCELLENT",
+        "🔵 GOOD":        "GOOD",
+        "⚠️ RESTRICTED":  "RESTRICTED",
+        "❌ NOT SUITABLE": "NOT_SUITABLE",
+    }
+    rows_pv = []
+    for port, info in sorted(PORT_SUITABILITY.items()):
+        status = info["status"]
+        if status_filter != "All" and status != _filter_map.get(status_filter, ""):
+            continue
+        if country_filter and country_filter.lower() not in port.lower():
+            continue
+
+        max_draft = info.get("max_draft", 99.0)
+        if status == "NOT_SUITABLE":
+            reason = (f"❌ Max draft {max_draft}m — vessel needs "
+                      f"{vessel_draft}m laden. Physically impossible.")
+        elif status == "RESTRICTED":
+            if max_draft < vessel_draft:
+                reason = (f"⚠️ Max draft {max_draft}m < vessel laden "
+                          f"draft {vessel_draft}m. Ballast/partial entry only.")
+            else:
+                penalty = RESTRICTED_PORTS.get(port, {})
+                from data.port_restrictions import TIDAL_PENALTY_DAYS
+                td = TIDAL_PENALTY_DAYS.get(port, 0.5)
+                reason = f"⚠️ Tidal/river restrictions. Waiting penalty: +{td:.1f} days."
+        else:
+            reason = "✅ Fully accessible — vessel enters laden"
+
+        rows_pv.append({
+            "Port":      port,
+            "Status":    _status_map.get(status, status),
+            "Max Draft": f"{max_draft}m",
+            "Decision":  reason,
+            "Notes":     info.get("notes", ""),
+        })
+
+    df_pv = pd.DataFrame(rows_pv)
+    if df_pv.empty:
+        st.info("No ports match the current filter.")
+    else:
+        st.dataframe(
+            df_pv,
+            use_container_width=True,
+            hide_index=True,
+            height=520,
+            column_config={
+                "Port":      st.column_config.TextColumn("Port",       width="medium"),
+                "Status":    st.column_config.TextColumn("Status",     width="small"),
+                "Max Draft": st.column_config.TextColumn("Max Draft",  width="small"),
+                "Decision":  st.column_config.TextColumn(
+                    "Access / Elimination Reason", width="large"),
+                "Notes":     st.column_config.TextColumn("Notes",      width="medium"),
+            },
+        )
+
+    st.caption(
+        f"Vessel specs: Draft laden {vessel_draft}m | "
+        f"Ballast {vessel_draft_b}m | LOA {vessel_loa}m | Beam {vessel_beam}m"
+    )
 
