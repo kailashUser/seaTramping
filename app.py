@@ -143,10 +143,10 @@ st.markdown("""
         🚢 SEA Tramping Voyage Optimiser
     </div>
     <div style="font-size:0.95rem;color:rgba(255,255,255,0.75);margin-top:4px;">
-        Monte Carlo + Graph Optimisation &nbsp;|&nbsp;
+        Monte Carlo &nbsp;|&nbsp;
         Dual Fuel Exact Costing &nbsp;|&nbsp;
         Voyage Dependency Cascade &nbsp;|&nbsp;
-        70 Ports × 23 Commodities × 5 Years Data
+        
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -1013,6 +1013,13 @@ with tabs[1]:
         analysis = st.session_state['analysis']
         s = analysis['summary']
 
+        # ── Port → Country lookup for Sankey ─────────────────────────────────
+        try:
+            _intra_s, _ports_s, _, _ = load_data(DATA_PATH)
+            port_country_map = dict(zip(_ports_s['Port'], _ports_s['Country']))
+        except Exception:
+            port_country_map = {}
+
         # ── Hero KPI cards ────────────────────────────────────────────────────
         st.markdown("""
 <style>
@@ -1390,6 +1397,131 @@ with tabs[1]:
                 )
             else:
                 st.info("No log available — run the simulation to generate a log.")
+
+        # ── Cargo Flow Sankey ─────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown(
+            "<div style='font-size:13px;font-weight:600;color:#1a3a5c;"
+            "margin-bottom:8px'>🌊 Cargo Flow — Trade Pattern Analysis</div>"
+            "<div style='font-size:11px;color:#64748b;margin-bottom:12px'>"
+            "Flow width = number of voyages. Shows which trade lanes the "
+            "simulation discovers as most valuable.</div>",
+            unsafe_allow_html=True
+        )
+
+        # Build Sankey data from top 20 programmes
+        top_progs_sankey = analysis['top_programmes'][:20]
+        flow_counts = {}
+
+        for prog in top_progs_sankey:
+            for leg in prog.get('legs', []):
+                orig = leg.get('origin_port', '')
+                dest = leg.get('dest_port', '')
+                comm = leg.get('commodity', '')
+
+                orig_country = port_country_map.get(orig, orig[:8])
+                dest_country = port_country_map.get(dest, dest[:8])
+
+                if orig_country and dest_country and orig_country != dest_country:
+                    key = (orig_country, dest_country, comm)
+                    flow_counts[key] = flow_counts.get(key, 0) + 1
+
+        if flow_counts:
+            all_nodes = []
+            node_map  = {}
+
+            for (orig_c, dest_c, comm), count in flow_counts.items():
+                src_label = f"{orig_c} (Load)"
+                dst_label = f"{dest_c} (Disch)"
+                if src_label not in node_map:
+                    node_map[src_label] = len(all_nodes)
+                    all_nodes.append(src_label)
+                if dst_label not in node_map:
+                    node_map[dst_label] = len(all_nodes)
+                    all_nodes.append(dst_label)
+
+            links_agg = {}
+            for (orig_c, dest_c, comm), count in flow_counts.items():
+                src_label = f"{orig_c} (Load)"
+                dst_label = f"{dest_c} (Disch)"
+                lkey = (node_map[src_label], node_map[dst_label], comm)
+                links_agg[lkey] = links_agg.get(lkey, 0) + count
+
+            COMM_COLORS = {
+                'Steam Coal':           'rgba(71,85,105,0.6)',
+                'Coking Coal':          'rgba(51,65,85,0.6)',
+                'Nickel Ore':           'rgba(180,83,9,0.6)',
+                'Palm Kernel Expeller': 'rgba(22,163,74,0.6)',
+                'Sugar':                'rgba(234,179,8,0.6)',
+                'Steels':               'rgba(59,130,246,0.6)',
+                'Fertilizers':          'rgba(168,85,247,0.6)',
+                'Clinker':              'rgba(239,68,68,0.6)',
+                'Grain':                'rgba(16,185,129,0.6)',
+            }
+
+            sources = [lk[0] for lk in links_agg]
+            targets = [lk[1] for lk in links_agg]
+            values  = [v for v in links_agg.values()]
+            colors  = [COMM_COLORS.get(lk[2], 'rgba(100,116,139,0.5)')
+                       for lk in links_agg]
+            labels_hover = [lk[2] for lk in links_agg]
+
+            NODE_COLORS = []
+            for node in all_nodes:
+                if '(Load)' in node:
+                    NODE_COLORS.append('#1a3a5c')
+                else:
+                    NODE_COLORS.append('#166534')
+
+            fig_sankey = go.Figure(go.Sankey(
+                arrangement='snap',
+                node=dict(
+                    pad=20,
+                    thickness=20,
+                    line=dict(color='white', width=0.5),
+                    label=all_nodes,
+                    color=NODE_COLORS,
+                    hovertemplate='%{label}<extra></extra>',
+                ),
+                link=dict(
+                    source=sources,
+                    target=targets,
+                    value=values,
+                    color=colors,
+                    customdata=labels_hover,
+                    hovertemplate=(
+                        '%{customdata}<br>'
+                        'Voyages: %{value}<extra></extra>'
+                    ),
+                ),
+            ))
+            fig_sankey.update_layout(
+                height=420,
+                margin=dict(l=10, r=10, t=10, b=10),
+                paper_bgcolor='rgba(0,0,0,0)',
+                font=dict(size=11, color='#1e293b'),
+            )
+            st.plotly_chart(fig_sankey, use_container_width=True)
+
+            # Commodity colour legend
+            leg_cols = st.columns(len(COMM_COLORS))
+            for i, (comm_name, color) in enumerate(COMM_COLORS.items()):
+                if i < len(leg_cols):
+                    rgb = color.replace('rgba(', '').replace(')', '').split(',')
+                    hex_c = '#{:02x}{:02x}{:02x}'.format(
+                        int(rgb[0]), int(rgb[1]), int(rgb[2])
+                    )
+                    leg_cols[i].markdown(
+                        f"<div style='display:flex;align-items:center;gap:4px'>"
+                        f"<div style='width:12px;height:12px;border-radius:2px;"
+                        f"background:{hex_c}'></div>"
+                        f"<span style='font-size:10px;color:#475569'>"
+                        f"{comm_name}</span></div>",
+                        unsafe_allow_html=True
+                    )
+        else:
+            st.info("Run simulation to see cargo flow analysis.")
+
     else:
         st.info("Run the simulation first.")
 
@@ -2082,6 +2214,33 @@ if run_simulation_clicked and os.path.exists(DATA_PATH):
         st.session_state['sim_done']    = True
 
     overlay.empty()
+
+    # ── Completion celebration banner ─────────────────────────────────────
+    best_r        = max(results, key=lambda r: r['total_profit'])
+    elapsed_total = elapsed
+    st.markdown(
+        f"<div style='background:linear-gradient(135deg,#166534,#15803d);"
+        f"border-radius:16px;padding:24px 28px;margin:16px 0;"
+        f"text-align:center'>"
+        f"<div style='font-size:1.1rem;color:#86efac;font-weight:600;"
+        f"margin-bottom:8px'>✅ COMPASS Simulation Complete</div>"
+        f"<div style='display:flex;justify-content:center;gap:40px;flex-wrap:wrap'>"
+        f"<div><div style='font-size:2rem;font-weight:700;color:white'>"
+        f"${best_r['total_profit']:,.0f}</div>"
+        f"<div style='font-size:11px;color:#86efac'>Best Programme Profit</div></div>"
+        f"<div><div style='font-size:2rem;font-weight:700;color:white'>"
+        f"${best_r['avg_tce']:,.0f}/day</div>"
+        f"<div style='font-size:11px;color:#86efac'>Best TCE</div></div>"
+        f"<div><div style='font-size:2rem;font-weight:700;color:white'>"
+        f"{n_iterations:,}</div>"
+        f"<div style='font-size:11px;color:#86efac'>Iterations</div></div>"
+        f"<div><div style='font-size:2rem;font-weight:700;color:white'>"
+        f"{elapsed_total:.0f}s</div>"
+        f"<div style='font-size:11px;color:#86efac'>Duration</div></div>"
+        f"</div></div>",
+        unsafe_allow_html=True
+    )
+
     # Rerun so all tabs render with the newly stored results
     st.rerun()
 
@@ -3180,449 +3339,590 @@ with tabs[5]:
                 pass
 
 
-        # -- Programme summary strip --
-        ps1, ps2, ps3, ps4 = st.columns(4)
-        ps1.metric("Voyages",     prog_vj['n_voyages'])
-        ps2.metric("TCE",         f"${prog_vj['avg_tce']:,.0f}/day")
-        ps3.metric("Utilisation", f"{prog_vj['utilisation_pct']:.1f}%")
-        ps4.metric("Algorithm",   prog_vj.get('algorithm', 'mc').upper())
+        # -- Enhanced live stats with profit counter ─────────────────────
+        cur_anim_voy = 0
+        cur_leg_va   = legs_list_vj[0] if legs_list_vj else {}
+        legs_list    = legs_list_vj
+        cum_pl_va    = prog_vj['total_profit']
+        cum_days_va  = sum(l.get('total_days', 0) for l in legs_list_vj)
+        cur_pl_va    = cur_leg_va.get('profit_loss', cur_leg_va.get('profit', 0))
+        _arc_nm_0    = _calc_nm_vj(
+            cur_leg_va.get('origin_port', ''),
+            cur_leg_va.get('dest_port', ''),
+        )
+        all_arc_nms  = [_arc_nm_0]
+
+        st.markdown(
+            f"<div style='background:linear-gradient(135deg,#1a3a5c,#2d5986);"
+            f"border-radius:12px;padding:16px 20px;margin-bottom:12px'>"
+            f"<div style='display:flex;align-items:center;justify-content:space-between;"
+            f"flex-wrap:wrap;gap:12px'>"
+
+            f"<div>"
+            f"<div style='font-size:10px;color:#94a3b8;text-transform:uppercase;"
+            f"letter-spacing:.06em'>Current Voyage</div>"
+            f"<div style='font-size:14px;font-weight:600;color:white;margin-top:2px'>"
+            f"{cur_leg_va.get('origin_port','')[:12]} → "
+            f"{cur_leg_va.get('dest_port','')[:12]}</div>"
+            f"<div style='font-size:11px;color:#94a3b8;margin-top:2px'>"
+            f"{cur_leg_va.get('commodity','—')} · "
+            f"{all_arc_nms[cur_anim_voy]:,} NM</div>"
+            f"</div>"
+
+            f"<div style='text-align:center'>"
+            f"<div style='font-size:10px;color:#94a3b8;text-transform:uppercase;"
+            f"letter-spacing:.06em'>Cumulative Profit</div>"
+            f"<div style='font-size:2.2rem;font-weight:700;"
+            f"color:{'#86efac' if cum_pl_va >= 0 else '#fca5a5'};"
+            f"letter-spacing:-1px;margin-top:2px'>"
+            f"{'+'if cum_pl_va>=0 else ''}"
+            f"${abs(cum_pl_va):,.0f}</div>"
+            f"<div style='font-size:10px;color:#94a3b8;margin-top:2px'>"
+            f"Voyage {cur_anim_voy+1}/{len(legs_list)} · "
+            f"Day {cum_days_va:.0f}/330</div>"
+            f"</div>"
+
+            f"<div style='text-align:right'>"
+            f"<div style='font-size:10px;color:#94a3b8;text-transform:uppercase;"
+            f"letter-spacing:.06em'>Voyage P&L</div>"
+            f"<div style='font-size:1.4rem;font-weight:600;"
+            f"color:{'#86efac' if cur_pl_va>=0 else '#fca5a5'};"
+            f"margin-top:2px'>"
+            f"{'+'if cur_pl_va>=0 else ''}${cur_pl_va:,.0f}</div>"
+            f"<div style='font-size:10px;color:#94a3b8;margin-top:2px'>"
+            f"TCE ${cur_pl_va/max(cur_leg_va.get('total_days',1),1):,.0f}/day</div>"
+            f"</div>"
+
+            f"</div></div>",
+            unsafe_allow_html=True
+        )
+
+        # Secondary stats row
+        sv1, sv2, sv3, sv4, sv5, sv6 = st.columns(6)
+        sv1.metric("Route",     f"V{cur_anim_voy+1}/{len(legs_list)}")
+        sv2.metric("Commodity", cur_leg_va.get('commodity', '—')[:12])
+        sv3.metric("Distance",  f"{all_arc_nms[cur_anim_voy]:,} NM")
+        sv4.metric(
+            "Voyage P&L",
+            f"{'+'if cur_pl_va>=0 else ''}${cur_pl_va:,.0f}",
+            delta_color="normal" if cur_pl_va >= 0 else "inverse",
+        )
+        sv5.metric(
+            "Annual target",
+            f"${cum_pl_va/max(cum_days_va,1)*330:,.0f}",
+            help="Extrapolated annual profit at current rate",
+        )
+        sv6.metric("Days elapsed", f"{cum_days_va:.0f}/330")
 
         st.markdown("---")
 
         # ═══════════════════════════════════════════════════════════════
-        # ZONE 2 — Pure HTML/JS animated vessel journey (zero Python)
+        # ═══════════════════════════════════════════════════════════════
+        # ZONE 2 — Dark maritime map (Plotly scattermapbox, carto-darkmatter)
         # ═══════════════════════════════════════════════════════════════
 
-        st.markdown(
-            "<div style='margin-bottom:12px;padding:12px 18px;"
-            "background:linear-gradient(135deg,#1a3a5c,#2d5986);"
-            "border-radius:10px;display:flex;align-items:center;"
-            "justify-content:space-between;flex-wrap:wrap;gap:8px'>"
-            "<div>"
-            "<span style='font-size:14px;font-weight:700;color:white'>"
-            "🚢 Annual Vessel Journey</span>"
-            "<span style='font-size:11px;color:rgba(255,255,255,0.7);"
-            "margin-left:10px'>"
-            "Runs entirely in browser — zero lag</span>"
-            "</div>"
-            f"<span style='font-size:11px;color:rgba(255,255,255,0.85)'>"
-            f"{prog_vj['n_voyages']} voyages · "
-            f"${prog_vj['total_profit']:,.0f} profit · "
-            f"TCE ${prog_vj['avg_tce']:,.0f}/day"
-            f"</span></div>",
-            unsafe_allow_html=True
-        )
-
-        # ── Pre-compute all data in Python → serialise to JSON ────────
-        import math as _math2
         import json as _json2
-
-        def _geo2(lat1, lon1, lat2, lon2, n=40):
-            if lat1 == lat2 and lon1 == lon2:
-                return [lat1, lat2], [lon1, lon2]
-            r  = _math2.radians
-            d2 = _math2.degrees
-            la1,lo1,la2,lo2 = r(lat1),r(lon1),r(lat2),r(lon2)
-            d = 2*_math2.asin(_math2.sqrt(
-                _math2.sin((la2-la1)/2)**2
-                + _math2.cos(la1)*_math2.cos(la2)
-                  *_math2.sin((lo2-lo1)/2)**2
-            ))
-            if d == 0:
-                return [lat1,lat2],[lon1,lon2]
-            lats,lons=[],[]
-            for i in range(n+1):
-                f=i/n
-                A=_math2.sin((1-f)*d)/_math2.sin(d)
-                B=_math2.sin(f*d)/_math2.sin(d)
-                x=A*_math2.cos(la1)*_math2.cos(lo1)+B*_math2.cos(la2)*_math2.cos(lo2)
-                y=A*_math2.cos(la1)*_math2.sin(lo1)+B*_math2.cos(la2)*_math2.sin(lo2)
-                z=A*_math2.sin(la1)+B*_math2.sin(la2)
-                lats.append(d2(_math2.atan2(z,_math2.sqrt(x*x+y*y))))
-                lons.append(d2(_math2.atan2(y,x)))
-            return lats,lons
-
-        def _nm2(pa, pb):
-            if pa not in port_coords_vj or pb not in port_coords_vj:
-                return 0
-            la1,lo1=port_coords_vj[pa]
-            la2,lo2=port_coords_vj[pb]
-            R=3440.065
-            r=_math2.radians
-            dlat=r(la2-la1);dlon=r(lo2-lo1)
-            a=(_math2.sin(dlat/2)**2
-               +_math2.cos(r(la1))*_math2.cos(r(la2))
-               *_math2.sin(dlon/2)**2)
-            st2=2*R*_math2.asin(_math2.sqrt(a))
-            c1=port_country_vj.get(pa,'')
-            c2=port_country_vj.get(pb,'')
-            f=(1.45 if c1=='Indonesia' and c2=='Indonesia'
-               else 1.40 if 'Bangladesh' in [c1,c2]
-               else 1.35 if 'Philippines' in [c1,c2]
-               else 1.25)
-            return round(st2*f)
 
         voyage_data_vj = []
         for leg in legs_list_vj:
-            op = leg.get('origin_port','')
-            dp = leg.get('dest_port','')
-            pl = leg.get('profit_loss', leg.get('profit',0))
+            op   = leg.get('origin_port', '')
+            dp   = leg.get('dest_port', '')
+            pl   = leg.get('profit_loss', leg.get('profit', 0))
+
+            # Laden route — real sea routes with geodesic fallback
             lats2, lons2 = _get_sea_route_lats_lons_vj(op, dp, port_coords_vj)
+
+            # Ballast route
+            _bp = leg.get('ballast_from_port', '')
+            _get_ballast_lats, _get_ballast_lons = [], []
+            if _bp and _bp != op and _bp in port_coords_vj and op in port_coords_vj:
+                _get_ballast_lats, _get_ballast_lons = _get_sea_route_lats_lons_vj(
+                    _bp, op, port_coords_vj
+                )
+
             voyage_data_vj.append({
-                'from':  op,
-                'to':    dp,
-                'comm':  leg.get('commodity',''),
-                'pl':    round(pl),
-                'days':  round(leg.get('total_days',0),1),
-                'nm':    _nm2(op,dp),
-                'rate':  round(leg.get('freight_rate',0),2),
-                'cargo': round(leg.get('cargo_mt',0)),
-                'cum':   round(leg.get('cum_profit',0)),
-                'lats':  lats2,
-                'lons':  lons2,
-                'olat':  port_coords_vj[op][0] if op in port_coords_vj else 0,
-                'olon':  port_coords_vj[op][1] if op in port_coords_vj else 0,
-                'dlat':  port_coords_vj[dp][0] if dp in port_coords_vj else 0,
-                'dlon':  port_coords_vj[dp][1] if dp in port_coords_vj else 0,
+                'from':         op,
+                'to':           dp,
+                'comm':         leg.get('commodity', ''),
+                'pl':           round(pl),
+                'days':         round(leg.get('total_days', 0), 1),
+                'nm':           _calc_nm_vj(op, dp),
+                'rate':         round(leg.get('freight_rate', 0), 2),
+                'cargo':        round(leg.get('cargo_mt', 0)),
+                'cum':          round(leg.get('cum_profit', 0)),
+                'lats':         lats2,
+                'lons':         lons2,
+                'ballast_from': _bp,
+                'ballast_lats': _get_ballast_lats,
+                'ballast_lons': _get_ballast_lons,
+                'ballast_days': round(leg.get('ballast_days', 0), 1),
+                'laden_days':   round(leg.get('laden_days', 0), 1),
+                'olat': port_coords_vj[op][0] if op in port_coords_vj else 0,
+                'olon': port_coords_vj[op][1] if op in port_coords_vj else 0,
+                'dlat': port_coords_vj[dp][0] if dp in port_coords_vj else 0,
+                'dlon': port_coords_vj[dp][1] if dp in port_coords_vj else 0,
             })
 
         all_ports_vj2 = [
             {'name': p,
              'lat':  port_coords_vj[p][0],
              'lon':  port_coords_vj[p][1]}
-            for p in set(l.get('origin_port','') for l in legs_list_vj)
-                     | set(l.get('dest_port','') for l in legs_list_vj)
+            for p in (set(l.get('origin_port', '') for l in legs_list_vj)
+                      | set(l.get('dest_port', '') for l in legs_list_vj))
             if p and p in port_coords_vj
         ]
-
         if all_ports_vj2:
-            _clat2 = sum(p['lat'] for p in all_ports_vj2)/len(all_ports_vj2)
-            _clon2 = sum(p['lon'] for p in all_ports_vj2)/len(all_ports_vj2)
+            _clat2 = sum(p['lat'] for p in all_ports_vj2) / len(all_ports_vj2)
+            _clon2 = sum(p['lon'] for p in all_ports_vj2) / len(all_ports_vj2)
         else:
             _clat2, _clon2 = 8.0, 108.0
 
-        voyage_json2  = _json2.dumps(voyage_data_vj)
-        ports_json2   = _json2.dumps(all_ports_vj2)
-        centre_json2  = _json2.dumps({'lat': _clat2, 'lon': _clon2})
+        voyage_json2 = _json2.dumps(voyage_data_vj)
+        ports_json2  = _json2.dumps(all_ports_vj2)
+        centre_json2 = _json2.dumps({'lat': _clat2, 'lon': _clon2})
 
-        # ── Pure HTML/JS component ─────────────────────────────────────
-        html_vj = f"""
+        # ── Dark Plotly scattermapbox map ─────────────────────────────
+        MARITIME_HTML = f"""
 <!DOCTYPE html>
-<html><head><meta charset="utf-8">
+<html>
+<head>
+<meta charset="utf-8">
 <style>
-* {{ box-sizing:border-box; margin:0; padding:0; font-family:sans-serif }}
-body {{ background:transparent }}
-#map {{ width:100%; height:480px; border-radius:10px;
-        border:1px solid #e2e8f0; overflow:hidden }}
-.controls {{ display:flex; align-items:center; gap:8px;
-             margin:10px 0 8px; flex-wrap:wrap }}
-.btn-primary {{ background:#1a3a5c; color:white; border:none;
-                padding:8px 20px; border-radius:8px; font-size:13px;
-                font-weight:600; cursor:pointer; min-width:90px }}
-.btn-primary:hover {{ background:#2d5986 }}
-.btn-sec {{ background:white; color:#1a3a5c;
-            border:1px solid #e2e8f0; padding:8px 14px;
-            border-radius:8px; font-size:13px; cursor:pointer }}
-.btn-sec:hover {{ background:#f8fafc }}
-select {{ padding:7px 12px; border-radius:8px;
-          border:1px solid #e2e8f0; font-size:13px;
-          background:white; color:#1a3a5c; cursor:pointer }}
-input[type=range] {{ flex:1; min-width:100px; accent-color:#1a3a5c }}
-.badge {{ background:linear-gradient(135deg,#1a3a5c,#2d5986);
-          color:white; padding:6px 14px; border-radius:8px;
-          font-size:12px; font-weight:600; white-space:nowrap }}
-.stats {{ display:grid; grid-template-columns:repeat(6,1fr);
-          gap:8px; margin-top:8px }}
-.stat {{ background:#f8fafc; border-radius:8px; padding:8px 10px;
-         border:1px solid #e2e8f0 }}
-.stat-lbl {{ font-size:10px; color:#94a3b8; text-transform:uppercase;
-             letter-spacing:.04em }}
-.stat-val {{ font-size:13px; font-weight:600; color:#1a3a5c;
-             margin-top:2px; white-space:nowrap; overflow:hidden;
-             text-overflow:ellipsis }}
-.leg-row {{ display:flex; align-items:center; gap:6px; padding:5px 8px;
-            border-radius:6px; cursor:pointer; font-size:11px;
-            transition:background .1s; border:1px solid transparent }}
-.leg-row:hover {{ background:#f1f5f9 }}
-.leg-row.active {{ background:#eaf3de; border-color:#639922 }}
-.tag {{ font-size:10px; padding:2px 7px; border-radius:10px;
-        font-weight:500; white-space:nowrap }}
-.tag-g {{ background:#dcfce7; color:#166534 }}
-.tag-r {{ background:#fee2e2; color:#991b1b }}
-.tag-b {{ background:#e6f1fb; color:#0c447c }}
-.legend {{ display:flex; gap:14px; flex-wrap:wrap;
-           margin-top:8px; align-items:center; font-size:11px;
-           color:#64748b }}
-.leg-dot {{ width:12px; height:12px; border-radius:50%;
-            display:inline-block; margin-right:4px }}
-.leg-line {{ width:22px; height:3px; display:inline-block;
-             margin-right:4px; vertical-align:middle }}
-</style></head>
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+body {{ background:#0a1628; font-family:-apple-system,sans-serif; }}
+#map {{ width:100%; height:480px; border-radius:10px; overflow:hidden; }}
+.controls {{ display:flex; align-items:center; gap:8px; margin:8px 0 4px; flex-wrap:wrap; }}
+.btn {{ background:#1a3a5c; color:white; border:none; padding:7px 16px;
+        border-radius:8px; font-size:12px; cursor:pointer; min-width:80px; }}
+.btn:hover {{ background:#2d5986; }}
+.btn-sec {{ background:#0f172a; color:#94a3b8; border:1px solid #334155;
+             padding:7px 14px; border-radius:8px; font-size:12px; cursor:pointer; }}
+.btn-sec:hover {{ background:#1e293b; }}
+select {{ padding:6px 10px; border-radius:8px; border:1px solid #334155;
+          font-size:12px; background:#1e293b; color:#e2e8f0; cursor:pointer; }}
+.badge {{ background:#1e293b; color:#7dd3fc; padding:6px 12px; border-radius:8px;
+          font-size:12px; font-weight:500; border:1px solid #334155; white-space:nowrap; }}
+.stats {{ display:grid; grid-template-columns:repeat(7,1fr); gap:5px; margin-top:4px; }}
+.stat {{ background:#1e293b; border-radius:8px; padding:6px 10px; border:1px solid #334155; }}
+.stat-lbl {{ font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:.05em; }}
+.stat-val {{ font-size:12px; font-weight:500; color:#e2e8f0; margin-top:2px;
+             white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+</style>
+</head>
 <body>
 <div id="map"></div>
 <div class="controls">
-  <button class="btn-primary" id="btnPlay">▶ Play</button>
-  <button class="btn-sec"     id="btnReset">↺ Reset</button>
-  <select id="spdSel">
+  <button class="btn" id="btnPlay" onclick="togglePlay()">&#9654; Play</button>
+  <button class="btn-sec" onclick="resetAnim()">&#8635; Reset</button>
+  <select id="spdSel" onchange="setSpd(this.value)">
     <option value="120">Slow</option>
     <option value="60" selected>Normal</option>
     <option value="30">Fast</option>
     <option value="15">Very Fast</option>
   </select>
-  <input type="range" id="scrub" min="0" max="100" value="0" step="1">
+  <input type="range" id="scrub" min="0" max="100" value="0" step="1"
+         style="flex:1;min-width:80px;accent-color:#3b82f6">
   <span class="badge" id="voyBadge">V 1 / —</span>
 </div>
 <div class="stats">
   <div class="stat"><div class="stat-lbl">Route</div>
     <div class="stat-val" id="sRoute">—</div></div>
+  <div class="stat"><div class="stat-lbl">Phase</div>
+    <div class="stat-val" id="sPhase">—</div></div>
   <div class="stat"><div class="stat-lbl">Commodity</div>
     <div class="stat-val" id="sComm">—</div></div>
   <div class="stat"><div class="stat-lbl">Distance</div>
     <div class="stat-val" id="sNm">—</div></div>
-  <div class="stat"><div class="stat-lbl">Voyage P&L</div>
+  <div class="stat"><div class="stat-lbl">Voyage P&amp;L</div>
     <div class="stat-val" id="sPl">—</div></div>
   <div class="stat"><div class="stat-lbl">Cumulative</div>
     <div class="stat-val" id="sCum">$0</div></div>
   <div class="stat"><div class="stat-lbl">Days elapsed</div>
     <div class="stat-val" id="sDays">0 d</div></div>
 </div>
-<div style="margin-top:10px;font-size:11px;color:#64748b;margin-bottom:4px">
-  Voyage schedule — click to jump
-</div>
-<div id="legList"
-     style="max-height:180px;overflow-y:auto;display:flex;
-            flex-direction:column;gap:2px;padding-right:4px"></div>
-<div class="legend">
-  <span><span class="leg-dot" style="background:#f59e0b"></span>Vessel</span>
-  <span><span class="leg-dot" style="background:#1d4ed8"></span>Load port</span>
-  <span><span class="leg-dot" style="background:#dc2626"></span>Discharge</span>
-  <span><span class="leg-line" style="background:#22c55e"></span>Profitable</span>
-  <span><span class="leg-line" style="background:#ef4444"></span>Loss leg</span>
-  <a href="https://www.marinetraffic.com" target="_blank"
-     style="margin-left:auto;color:#0369a1;text-decoration:none">
-    MarineTraffic ↗</a>
-</div>
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist@2.26.0/plotly.min.js"></script>
 <script>
-const VOYAGES = {voyage_json2};
+const VOYAGES   = {voyage_json2};
 const ALL_PORTS = {ports_json2};
-const CENTRE = {centre_json2};
-const globalFrames = [];
-VOYAGES.forEach((v, vi) => {{
-  if (!v.lats.length) return;
-  const step = Math.max(1, Math.floor(v.lats.length / 30));
-  for (let si = 0; si < v.lats.length; si += step) {{
-    globalFrames.push({{ vi, si, lat: v.lats[si], lon: v.lons[si] }});
-  }}
-  const last = v.lats.length - 1;
-  if (globalFrames[globalFrames.length-1].si !== last)
-    globalFrames.push({{ vi, si: last, lat: v.lats[last], lon: v.lons[last] }});
-}});
+const CENTRE    = {centre_json2};
+
 const traces = [];
+
+// 1. Background port dots
 traces.push({{
   type:'scattermapbox',
   lat: ALL_PORTS.map(p => p.lat),
   lon: ALL_PORTS.map(p => p.lon),
   mode:'markers',
-  marker:{{size:6, color:'#64748b', opacity:0.4}},
+  marker:{{size:5, color:'#64748b', opacity:0.5}},
   hoverinfo:'skip', showlegend:false, name:'bg_ports'
 }});
+
+// 2. Background voyage arcs (ballast grey + laden coloured)
 VOYAGES.forEach((v, vi) => {{
+  if (v.ballast_lats && v.ballast_lats.length > 1) {{
+    traces.push({{
+      type:'scattermapbox',
+      lat: v.ballast_lats, lon: v.ballast_lons, mode:'lines',
+      line:{{width:1.5, color:'rgba(148,163,184,0.25)'}},
+      opacity:1, hoverinfo:'skip', showlegend:false, name:'ballast_'+vi
+    }});
+  }}
   if (!v.lats.length) return;
   const col = v.pl >= 0 ? '#22c55e' : '#ef4444';
   traces.push({{
     type:'scattermapbox',
     lat: v.lats, lon: v.lons, mode:'lines',
-    line:{{width:2, color:col}}, opacity:0.18,
-    hoverinfo:'skip', showlegend:false, name:`arc_${{vi}}`
+    line:{{width:2, color:col}}, opacity:0.22,
+    hoverinfo:'skip', showlegend:false, name:'arc_'+vi
   }});
 }});
-ALL_PORTS.forEach(p => {{
-  traces.push({{
-    type:'scattermapbox',
-    lat:[p.lat], lon:[p.lon],
-    mode:'markers+text',
-    marker:{{size:7, color:'#475569', opacity:0.6}},
-    text:[p.name], textposition:'top right',
-    textfont:{{size:9, color:'#334155'}},
-    hovertemplate:`<b>${{p.name}}</b><extra></extra>`,
-    showlegend:false, name:`lbl_${{p.name}}`
-  }});
+
+// 3. Port markers
+const portCoords = {{}};
+ALL_PORTS.forEach(p => {{ portCoords[p.name] = {{lat:p.lat, lon:p.lon}}; }});
+const portsSeen = {{}};
+VOYAGES.forEach(v => {{
+  if (!portsSeen[v.from]) portsSeen[v.from] = 'load';
+  if (!portsSeen[v.to])   portsSeen[v.to]   = 'disch';
 }});
+const loadNames  = Object.keys(portsSeen).filter(n => portsSeen[n]==='load'  && portCoords[n]);
+const dischNames = Object.keys(portsSeen).filter(n => portsSeen[n]==='disch' && portCoords[n]);
+
+traces.push({{
+  type:'scattermapbox',
+  lat: loadNames.map(n => portCoords[n].lat),
+  lon: loadNames.map(n => portCoords[n].lon),
+  mode:'markers+text', text: loadNames,
+  marker:{{size:9, color:'#3b82f6', opacity:0.85}},
+  textposition:'top right', textfont:{{size:9, color:'#cbd5e1'}},
+  hoverinfo:'text', showlegend:false, name:'load_ports'
+}});
+traces.push({{
+  type:'scattermapbox',
+  lat: dischNames.map(n => portCoords[n].lat),
+  lon: dischNames.map(n => portCoords[n].lon),
+  mode:'markers+text', text: dischNames,
+  marker:{{size:9, color:'#dc2626', opacity:0.85}},
+  textposition:'top right', textfont:{{size:9, color:'#cbd5e1'}},
+  hoverinfo:'text', showlegend:false, name:'disch_ports'
+}});
+
+// 4. Active traces (initially empty, updated by Plotly.restyle)
+const ACTIVE_BALLAST_IDX = traces.length;
+traces.push({{
+  type:'scattermapbox', lat:[], lon:[], mode:'lines',
+  line:{{width:3, color:'rgba(148,163,184,0.85)'}},
+  opacity:1, hoverinfo:'skip', showlegend:false, name:'active_ballast'
+}});
+
 const ACTIVE_ARC_IDX = traces.length;
 traces.push({{
-  type:'scattermapbox',
-  lat:[], lon:[], mode:'lines',
-  line:{{width:6, color:'#f59e0b'}},
+  type:'scattermapbox', lat:[], lon:[], mode:'lines',
+  line:{{width:5, color:'#f59e0b'}},
   opacity:1, hoverinfo:'skip', showlegend:false, name:'active_arc'
 }});
+
+// 5. Vessel marker
 const VESSEL_IDX = traces.length;
-const f0 = globalFrames[0] || {{vi:0,si:0,lat:CENTRE.lat,lon:CENTRE.lon}};
 traces.push({{
   type:'scattermapbox',
-  lat:[f0.lat], lon:[f0.lon], mode:'markers',
-  marker:{{size:20, color:'#f59e0b'}},
-  hovertext:'🚢 Vessel', hoverinfo:'text',
-  showlegend:false, name:'vessel'
+  lat:[CENTRE.lat], lon:[CENTRE.lon], mode:'markers',
+  marker:{{size:14, color:'#f59e0b', symbol:'circle'}},
+  hoverinfo:'skip', showlegend:false, name:'vessel'
 }});
-const LOAD_IDX = traces.length;
-traces.push({{
-  type:'scattermapbox',
-  lat:[VOYAGES[0]?.olat||0], lon:[VOYAGES[0]?.olon||0],
-  mode:'markers+text',
-  marker:{{size:16, color:'#1d4ed8'}},
-  text:[VOYAGES[0]?.from||''], textposition:'top right',
-  textfont:{{size:11, color:'#1e293b'}},
-  hoverinfo:'skip', showlegend:false, name:'load_port'
-}});
-const DISCH_IDX = traces.length;
-traces.push({{
-  type:'scattermapbox',
-  lat:[VOYAGES[0]?.dlat||0], lon:[VOYAGES[0]?.dlon||0],
-  mode:'markers+text',
-  marker:{{size:16, color:'#dc2626'}},
-  text:[VOYAGES[0]?.to||''], textposition:'top right',
-  textfont:{{size:11, color:'#1e293b'}},
-  hoverinfo:'skip', showlegend:false, name:'disch_port'
-}});
+
 const layout = {{
   mapbox:{{
-    style:'carto-positron',
+    style:'carto-darkmatter',
     zoom:4.2,
     center:{{lat:CENTRE.lat, lon:CENTRE.lon}}
   }},
   height:480,
-  margin:{{l:0,r:0,t:0,b:0}},
-  paper_bgcolor:'rgba(0,0,0,0)',
+  margin:{{l:0, r:0, t:0, b:0}},
+  paper_bgcolor:'rgba(10,22,40,0)',
+  plot_bgcolor:'rgba(10,22,40,0)',
   showlegend:false,
-  hoverlabel:{{bgcolor:'white',bordercolor:'#1e293b',font:{{size:12}}}}
+  hoverlabel:{{bgcolor:'#1e293b', bordercolor:'#334155',
+               font:{{size:12, color:'#e2e8f0'}}}},
 }};
+
 Plotly.newPlot('map', traces, layout, {{
-  responsive:true,
-  displayModeBar:false,
-  scrollZoom:true
+  responsive:true, displayModeBar:false, scrollZoom:true
 }});
-const legList = document.getElementById('legList');
-VOYAGES.forEach((v, vi) => {{
-  const row = document.createElement('div');
-  row.className = 'leg-row';
-  row.id = `leg_${{vi}}`;
-  const plTag = v.pl >= 0 ? 'tag-g' : 'tag-r';
-  const sign  = v.pl >= 0 ? '+' : '';
-  const fromS = v.from.split(' ')[0];
-  const toS   = v.to.split(' ')[0];
-  row.innerHTML = `
-    <span style="min-width:20px;color:#94a3b8;font-size:10px">${{vi+1}}</span>
-    <span style="flex:1;color:#1e293b;font-weight:500">
-      ${{fromS}} → ${{toS}}</span>
-    <span class="tag tag-b">${{v.comm}}</span>
-    <span class="tag ${{plTag}}">${{sign}}$${{Math.abs(v.pl/1000).toFixed(0)}}k</span>
-    <span style="color:#94a3b8;min-width:30px;text-align:right">
-      ${{v.days}}d</span>`;
-  row.addEventListener('click', () => jumpToVoyage(vi));
-  legList.appendChild(row);
-}});
-let curFrame = 0, playing = false, timer = null;
-const scrub = document.getElementById('scrub');
-scrub.max = globalFrames.length - 1;
-function updateStats(gf) {{
-  const v = VOYAGES[gf.vi];
-  if (!v) return;
-  const frac = gf.si / Math.max(v.lats.length - 1, 1);
-  const cumPl   = VOYAGES.slice(0, gf.vi).reduce((s,x)=>s+x.pl, 0)
-                  + v.pl * frac;
-  const cumDays = VOYAGES.slice(0, gf.vi).reduce((s,x)=>s+x.days, 0)
-                  + v.days * frac;
-  const fromS = v.from.split(' ')[0];
-  const toS   = v.to.split(' ')[0];
-  document.getElementById('sRoute').textContent = `${{fromS}} → ${{toS}}`;
-  document.getElementById('sComm').textContent  = v.comm;
-  document.getElementById('sNm').textContent    = `${{v.nm.toLocaleString()}} NM`;
-  const plEl = document.getElementById('sPl');
-  plEl.textContent  = (v.pl>=0?'+':'') + '$' + Math.abs(v.pl).toLocaleString();
-  plEl.style.color  = v.pl >= 0 ? '#166534' : '#991b1b';
-  const cumEl = document.getElementById('sCum');
-  const cumR  = Math.round(cumPl);
-  cumEl.textContent = (cumR>=0?'+':'') + '$' + Math.abs(cumR).toLocaleString();
-  cumEl.style.color = cumPl >= 0 ? '#166534' : '#991b1b';
-  document.getElementById('sDays').textContent =
-    Math.round(cumDays) + ' d';
-  document.getElementById('voyBadge').textContent =
-    `V ${{gf.vi+1}} / ${{VOYAGES.length}}`;
-  document.querySelectorAll('.leg-row').forEach((el, i) => {{
-    el.classList.toggle('active', i === gf.vi);
-  }});
-  const activeRow = document.getElementById(`leg_${{gf.vi}}`);
-  if (activeRow) activeRow.scrollIntoView({{block:'nearest'}});
+
+// Animation state
+let playing=false, spd=60, curV=0, t=0, cumDays=0;
+let phase='ballast';
+let lastTs=null, raf=null;
+
+function setSpd(v) {{ spd=parseInt(v); }}
+
+function togglePlay() {{
+  playing=!playing;
+  document.getElementById('btnPlay').textContent = playing ? '&#9646;&#9646; Pause' : '&#9654; Play';
+  if (playing && !raf) {{ lastTs=null; raf=requestAnimationFrame(tick); }}
 }}
-function renderFrame(fi) {{
-  if (fi < 0 || fi >= globalFrames.length) return;
-  const gf  = globalFrames[fi];
-  const v   = VOYAGES[gf.vi];
-  if (!v) return;
-  const partLats = v.lats.slice(0, gf.si + 1);
-  const partLons = v.lons.slice(0, gf.si + 1);
-  Plotly.restyle('map', {{
-    lat: [partLats],
-    lon: [partLons]
-  }}, [ACTIVE_ARC_IDX]);
-  Plotly.restyle('map', {{
-    lat: [[gf.lat]],
-    lon: [[gf.lon]]
-  }}, [VESSEL_IDX]);
-  Plotly.restyle('map', {{
-    lat: [[v.olat]], lon: [[v.olon]], text: [[v.from]]
-  }}, [LOAD_IDX]);
-  Plotly.restyle('map', {{
-    lat: [[v.dlat]], lon: [[v.dlon]], text: [[v.to]]
-  }}, [DISCH_IDX]);
-  scrub.value = fi;
-  updateStats(gf);
+
+function resetAnim() {{
+  playing=false;
+  document.getElementById('btnPlay').textContent='&#9654; Play';
+  if(raf){{ cancelAnimationFrame(raf); raf=null; }}
+  curV=0; t=0; cumDays=0; phase='ballast';
+  Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_BALLAST_IDX, ACTIVE_ARC_IDX]);
+  Plotly.restyle('map', {{lat:[[CENTRE.lat]], lon:[[CENTRE.lon]]}}, [VESSEL_IDX]);
+  document.getElementById('scrub').value=0;
+  updateHUD();
 }}
-function jumpToVoyage(vi) {{
-  const fi = globalFrames.findIndex(f => f.vi === vi);
-  if (fi >= 0) {{ curFrame = fi; renderFrame(curFrame); }}
+
+function tick(ts) {{
+  if(!lastTs) lastTs=ts;
+  const dt=(ts-lastTs)/1000; lastTs=ts;
+  if(playing) advance(dt);
+  updateHUD();
+  if(playing) raf=requestAnimationFrame(tick);
+  else raf=null;
 }}
-function advance() {{
-  if (curFrame >= globalFrames.length - 1) {{
-    playing = false; clearInterval(timer);
-    document.getElementById('btnPlay').textContent = '▶ Play';
-    return;
+
+function advance(dt) {{
+  const v=VOYAGES[curV]; if(!v) return;
+  const hasBallast = v.ballast_lats && v.ballast_lats.length > 1;
+  const phaseDays  = phase==='ballast' ? Math.max(v.ballast_days||0, 0.3)
+                                        : Math.max(v.laden_days || v.days || 1, 0.3);
+  t += (dt * 1000) / (spd * phaseDays);
+  cumDays += dt * phaseDays / phaseDays;  // increment by actual dt
+
+  if (t >= 1) {{
+    t = 0;
+    if (phase==='ballast' && hasBallast) {{
+      phase = 'laden';
+    }} else {{
+      curV++;
+      phase = 'ballast';
+      if (curV >= VOYAGES.length) {{
+        curV=VOYAGES.length-1; t=1; playing=false;
+        document.getElementById('btnPlay').textContent='&#9654; Play';
+        if(raf){{ cancelAnimationFrame(raf); raf=null; }}
+      }}
+    }}
   }}
-  curFrame++; renderFrame(curFrame);
-}}
-document.getElementById('btnPlay').addEventListener('click', function() {{
-  if (playing) {{
-    playing = false; clearInterval(timer);
-    this.textContent = '▶ Play';
+
+  const progress = Math.min(t, 1);
+  const v2 = VOYAGES[curV]; if(!v2) return;
+  const isBallastPhase = (phase==='ballast');
+
+  // Update active ballast trace
+  if (v2.ballast_lats && v2.ballast_lats.length > 1 && isBallastPhase) {{
+    const end = Math.floor(progress * v2.ballast_lats.length);
+    Plotly.restyle('map', {{
+      lat: [v2.ballast_lats.slice(0, end+1)],
+      lon: [v2.ballast_lons.slice(0, end+1)]
+    }}, [ACTIVE_BALLAST_IDX]);
   }} else {{
-    if (curFrame >= globalFrames.length - 1) curFrame = 0;
-    playing = true;
-    this.textContent = '⏸ Pause';
-    const spd = parseInt(document.getElementById('spdSel').value);
-    timer = setInterval(advance, spd);
+    Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_BALLAST_IDX]);
   }}
-}});
-document.getElementById('btnReset').addEventListener('click', () => {{
-  playing = false; clearInterval(timer);
-  document.getElementById('btnPlay').textContent = '▶ Play';
-  curFrame = 0; renderFrame(0);
-}});
-document.getElementById('scrub').addEventListener('input', e => {{
-  if (playing) {{
-    playing = false; clearInterval(timer);
-    document.getElementById('btnPlay').textContent = '▶ Play';
+
+  // Update active laden trace
+  if (!isBallastPhase && v2.lats.length) {{
+    const end = Math.floor(progress * v2.lats.length);
+    Plotly.restyle('map', {{
+      lat: [v2.lats.slice(0, end+1)],
+      lon: [v2.lons.slice(0, end+1)]
+    }}, [ACTIVE_ARC_IDX]);
+  }} else {{
+    Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_ARC_IDX]);
   }}
-  curFrame = parseInt(e.target.value);
-  renderFrame(curFrame);
+
+  // Update vessel position
+  const arcLat = isBallastPhase ? v2.ballast_lats : v2.lats;
+  const arcLon = isBallastPhase ? v2.ballast_lons : v2.lons;
+  if (arcLat && arcLat.length) {{
+    const idx = Math.min(Math.floor(progress * arcLat.length), arcLat.length-1);
+    Plotly.restyle('map', {{lat:[[arcLat[idx]]], lon:[[arcLon[idx]]]}}, [VESSEL_IDX]);
+  }}
+
+  // Scrub bar
+  const overall = (curV + (isBallastPhase ? 0 : 0.5) + progress*0.5) / VOYAGES.length;
+  document.getElementById('scrub').value = Math.round(overall*100);
+}}
+
+function updateHUD() {{
+  const v = VOYAGES[curV] || VOYAGES[VOYAGES.length-1];
+  const cumPl = VOYAGES.slice(0, curV).reduce((s,x) => s+x.pl, 0);
+  const isBallastPhase = (phase==='ballast');
+
+  document.getElementById('sRoute').textContent =
+    v.from.split(' ')[0] + ' → ' + v.to.split(' ')[0];
+
+  const phaseEl = document.getElementById('sPhase');
+  phaseEl.textContent = isBallastPhase ? '□ Ballast' : '▦ Laden';
+  phaseEl.style.color = isBallastPhase ? '#94a3b8' : '#4ade80';
+
+  document.getElementById('sComm').textContent = v.comm || '—';
+  document.getElementById('sNm').textContent   = (v.nm||0).toLocaleString() + ' NM';
+  document.getElementById('sPl').textContent   = (v.pl>=0?'+':'') + '$' + (v.pl||0).toLocaleString();
+  document.getElementById('sCum').textContent  = (cumPl>=0?'+':'') + '$' + cumPl.toLocaleString();
+  document.getElementById('sDays').textContent = Math.round(cumDays) + ' d';
+  document.getElementById('voyBadge').textContent = 'V ' + (curV+1) + ' / ' + VOYAGES.length;
+}}
+
+// Scrub bar manual seek
+document.getElementById('scrub').addEventListener('input', function(e) {{
+  if(playing){{ playing=false; document.getElementById('btnPlay').textContent='&#9654; Play';
+                if(raf){{ cancelAnimationFrame(raf); raf=null; }} }}
+  const pct = parseInt(e.target.value) / 100;
+  curV  = Math.min(Math.floor(pct * VOYAGES.length), VOYAGES.length-1);
+  t=0; phase='ballast'; cumDays=0;
+  Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_BALLAST_IDX, ACTIVE_ARC_IDX]);
+  updateHUD();
 }});
-document.getElementById('spdSel').addEventListener('change', function() {{
-  if (playing) {{ clearInterval(timer); timer = setInterval(advance, parseInt(this.value)); }}
-}});
-renderFrame(0);
-</script></body></html>
-"""
-        components.html(html_vj, height=920, scrolling=False)
+
+updateHUD();
+</script>
+</body>
+</html>"""
+
+
+        # ── Elements BEFORE canvas ───────────────────────────────────────
+        legs_vj = legs_list_vj
+
+        # Element 1 — Voyage slider
+        sl_col1, sl_col2 = st.columns([5, 1])
+        with sl_col1:
+            vj_slider = st.slider(
+                "Voyage",
+                min_value=1,
+                max_value=len(legs_vj),
+                value=1,
+                step=1,
+                key='vj_voyage_slider',
+                label_visibility='collapsed',
+            )
+        with sl_col2:
+            st.markdown(
+                f"<div style='background:#1a3a5c;color:white;text-align:center;"
+                f"padding:6px 10px;border-radius:8px;font-size:13px;font-weight:500'>"
+                f"V {vj_slider} / {len(legs_vj)}</div>",
+                unsafe_allow_html=True
+            )
+
+        # Element 2 — Stats row
+        sel_vj_leg = legs_vj[vj_slider - 1]
+        sel_pl     = sel_vj_leg.get('profit_loss', sel_vj_leg.get('profit', 0))
+        cum_pl_vj  = sum(
+            l.get('profit_loss', l.get('profit', 0))
+            for l in legs_vj[:vj_slider]
+        )
+        sel_dist   = sel_vj_leg.get('laden_nm', sel_vj_leg.get('distance_nm', 0))
+        sel_comm   = sel_vj_leg.get('commodity', '—')
+        sel_orig   = sel_vj_leg.get('origin_port', '—')
+        sel_dest   = sel_vj_leg.get('dest_port', '—')
+        sel_days   = sum(l.get('total_days', 0) for l in legs_vj[:vj_slider])
+
+        sc1, sc2, sc3, sc4, sc5, sc6 = st.columns(6)
+        sc1.metric("Route",       f"{sel_orig.split()[0]} → {sel_dest.split()[0]}")
+        sc2.metric("Commodity",   sel_comm[:16])
+        sc3.metric("Distance",    f"{sel_dist:,.0f} NM")
+        sc4.metric("Voyage P&L",
+                   f"{'+'if sel_pl>=0 else ''}${sel_pl:,.0f}",
+                   delta_color="normal" if sel_pl >= 0 else "inverse")
+        sc5.metric("Cumulative",  f"+${cum_pl_vj:,.0f}")
+        sc6.metric("Days Elapsed", f"{sel_days:.0f} d")
+
+        # ── Canvas ───────────────────────────────────────────────────────
+        st.components.v1.html(MARITIME_HTML, height=570, scrolling=False)
+
+        # ── Elements AFTER canvas ─────────────────────────────────────────
+
+        # Element 3 — Voyage schedule list
+        st.markdown(
+            "<div style='font-size:11px;color:#64748b;margin-bottom:6px'>"
+            "Voyage schedule — click to jump</div>",
+            unsafe_allow_html=True
+        )
+        COMM_COLORS_VJ = {
+            'Steam Coal':           '#475569',
+            'Steels':               '#3b82f6',
+            'Palm Kernel Expeller': '#16a34a',
+            'Nickel Ore':           '#ea580c',
+            'Fertilizers':          '#7c3aed',
+            'Sugar':                '#ca8a04',
+            'Clinker':              '#dc2626',
+            'Coking Coal':          '#374151',
+        }
+        for i, leg in enumerate(legs_vj):
+            pl_l   = leg.get('profit_loss', leg.get('profit', 0))
+            comm_l = leg.get('commodity', '')
+            orig_l = leg.get('origin_port', '')[:12]
+            dest_l = leg.get('dest_port', '')[:12]
+            days_l = leg.get('total_days', 0)
+            sign_l = '+' if pl_l >= 0 else ''
+            pl_col_l = '#166534' if pl_l >= 0 else '#991b1b'
+            pl_bg_l  = '#dcfce7' if pl_l >= 0 else '#fee2e2'
+
+            c1, c2, c3 = st.columns([3, 2, 1])
+            with c1:
+                st.markdown(
+                    f"<div style='font-size:12px;padding:3px 0'>"
+                    f"<span style='color:#94a3b8;margin-right:6px'>{i+1}</span>"
+                    f"{orig_l} → {dest_l}</div>",
+                    unsafe_allow_html=True
+                )
+            with c2:
+                cc = COMM_COLORS_VJ.get(comm_l, '#64748b')
+                st.markdown(
+                    f"<span style='background:{cc}22;color:{cc};"
+                    f"font-size:10px;padding:2px 7px;border-radius:8px'>"
+                    f"{comm_l[:18]}</span>",
+                    unsafe_allow_html=True
+                )
+            with c3:
+                st.markdown(
+                    f"<div style='text-align:right'>"
+                    f"<span style='font-size:11px;background:{pl_bg_l};"
+                    f"color:{pl_col_l};padding:2px 7px;border-radius:8px'>"
+                    f"{sign_l}${abs(pl_l)/1000:.0f}k</span>"
+                    f"<div style='font-size:10px;color:#94a3b8;"
+                    f"text-align:right'>{days_l:.1f}d</div></div>",
+                    unsafe_allow_html=True
+                )
+
+        # Element 4 — Legend + MarineTraffic link
+        leg1, leg2, leg3, leg4, leg5 = st.columns(5)
+        leg1.markdown(
+            "<div style='display:flex;align-items:center;gap:4px'>"
+            "<div style='width:10px;height:10px;border-radius:50%;"
+            "background:#f59e0b'></div>"
+            "<span style='font-size:11px;color:#475569'>Vessel</span>"
+            "</div>", unsafe_allow_html=True
+        )
+        leg2.markdown(
+            "<div style='display:flex;align-items:center;gap:4px'>"
+            "<div style='width:10px;height:10px;border-radius:50%;"
+            "background:#1d4ed8'></div>"
+            "<span style='font-size:11px;color:#475569'>Load port</span>"
+            "</div>", unsafe_allow_html=True
+        )
+        leg3.markdown(
+            "<div style='display:flex;align-items:center;gap:4px'>"
+            "<div style='width:10px;height:10px;border-radius:50%;"
+            "background:#dc2626'></div>"
+            "<span style='font-size:11px;color:#475569'>Discharge</span>"
+            "</div>", unsafe_allow_html=True
+        )
+        leg4.markdown(
+            "<div style='display:flex;align-items:center;gap:4px'>"
+            "<div style='width:22px;height:3px;background:#22c55e'></div>"
+            "<span style='font-size:11px;color:#475569'>Profitable</span>"
+            "</div>", unsafe_allow_html=True
+        )
+        leg5.markdown(
+            "<div style='text-align:right'>"
+            "<a href='https://www.marinetraffic.com' "
+            "style='font-size:11px;color:#0369a1;text-decoration:none'>"
+            "MarineTraffic ↗</a></div>",
+            unsafe_allow_html=True
+        )
 
 # ─── TAB 7: PORT VALIDATION ──────────────────────────────────────────────────
 with tabs[6]:
