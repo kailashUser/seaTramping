@@ -23,18 +23,20 @@ VESSEL_API_BASE = "https://api.vesselapi.com/v1"
 
 
 def fetch_vessel_from_imo(imo_number: str) -> dict:
-    """Look up vessel dimensions from VesselAPI using IMO number."""
+    """Look up vessel dimensions from VesselAPI, with ShipXplorer fallback."""
+    # Primary: VesselAPI
     try:
         headers = {"Authorization": f"Bearer {VESSEL_API_KEY}"}
         url = f"{VESSEL_API_BASE}/vessel/{imo_number}?filter.idType=imo"
         resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code == 200:
             vessel = resp.json().get("vessel", {})
-            if vessel:
+            if vessel and vessel.get("deadweight_tonnage"):
                 return {
                     "success":     True,
                     "name":        vessel.get("name", "Unknown"),
                     "imo":         vessel.get("imo", imo_number),
+                    "mmsi":        vessel.get("mmsi", ""),
                     "dwt":         vessel.get("deadweight_tonnage", 0),
                     "loa":         vessel.get("length", 0),
                     "beam":        vessel.get("breadth", 0),
@@ -42,12 +44,42 @@ def fetch_vessel_from_imo(imo_number: str) -> dict:
                     "flag":        vessel.get("country", ""),
                     "vessel_type": vessel.get("vessel_type", ""),
                     "owner":       vessel.get("owner_name", ""),
+                    "call_sign":   vessel.get("call_sign", ""),
+                    "source":      "VesselAPI",
                 }
-        if resp.status_code == 404:
-            return {"success": False, "error": f"Vessel IMO {imo_number} not found in VesselAPI database."}
-        return {"success": False, "error": f"VesselAPI error: HTTP {resp.status_code}"}
-    except Exception as e:
-        return {"success": False, "error": f"Connection error: {str(e)}"}
+    except Exception:
+        pass
+
+    # Fallback: ShipXplorer public search
+    try:
+        sx_url = f"https://www.shipxplorer.com/api/vessel/imo/{imo_number}"
+        sx_resp = requests.get(
+            sx_url,
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+            timeout=10,
+        )
+        if sx_resp.status_code == 200:
+            d = sx_resp.json()
+            if d.get("imoNumber") or d.get("imo"):
+                return {
+                    "success":     True,
+                    "name":        d.get("shipName", d.get("name", "Unknown")),
+                    "imo":         d.get("imoNumber", d.get("imo", imo_number)),
+                    "mmsi":        d.get("mmsi", ""),
+                    "dwt":         float(d.get("deadWeight", d.get("dwt", 0)) or 0),
+                    "loa":         float(d.get("length", 0) or 0),
+                    "beam":        float(d.get("width", d.get("beam", 0)) or 0),
+                    "year_built":  d.get("yearOfBuild", d.get("yearBuilt", 0)),
+                    "flag":        d.get("flagName", d.get("flag", "")),
+                    "vessel_type": d.get("shipType", d.get("vesselType", "")),
+                    "owner":       d.get("ownerName", ""),
+                    "call_sign":   d.get("callSign", ""),
+                    "source":      "ShipXplorer",
+                }
+    except Exception:
+        pass
+
+    return {"success": False, "error": f"Vessel IMO {imo_number} not found in any database."}
 
 
 def fetch_bhsi_rate() -> dict:
@@ -457,20 +489,47 @@ if lookup_btn and imo_input.strip():
     with st.spinner("Looking up vessel..."):
         _imo_result = fetch_vessel_from_imo(imo_input.strip())
     if _imo_result["success"]:
-        st.session_state["imo_number"]  = imo_input.strip()
-        st.session_state["vessel_name"] = _imo_result["name"]
-        st.session_state["vessel_imo"]  = _imo_result["imo"]
-        st.session_state["api_dwt"]     = float(_imo_result["dwt"])
-        st.session_state["api_loa"]     = float(_imo_result["loa"])
-        st.session_state["api_beam"]    = float(_imo_result["beam"])
-        st.session_state["api_year"]    = _imo_result["year_built"]
-        st.session_state["api_flag"]    = _imo_result["flag"]
-        st.sidebar.success(
-            f"✓ {_imo_result['name']} ({_imo_result['flag']}) "
-            f"— {_imo_result['dwt']:,} DWT"
-        )
+        st.session_state["_pending_imo"] = _imo_result
     else:
         st.sidebar.error(_imo_result["error"])
+
+# Pending vessel verification banner
+if st.session_state.get("_pending_imo"):
+    _p = st.session_state["_pending_imo"]
+    _vtype = _p.get("vessel_type", "Unknown type")
+    _src   = _p.get("source", "API")
+    _is_bulk = any(kw in _vtype.lower() for kw in ("bulk", "handy", "supra", "panamax", "capesize"))
+    _warn_color = "#1a3a5c" if _is_bulk else "#7c2d12"
+    _warn_label = "" if _is_bulk else f" ⚠️ Type: {_vtype} — confirm this is correct"
+    st.sidebar.markdown(
+        f"<div style='background:{_warn_color};border:1px solid #334155;"
+        f"border-radius:8px;padding:8px 10px;margin:4px 0;font-size:11px;color:#e2e8f0'>"
+        f"<div style='font-weight:700;font-size:13px;margin-bottom:4px'>"
+        f"{_p['name']}</div>"
+        f"IMO&nbsp;{_p['imo']} · MMSI&nbsp;{_p.get('mmsi','—')} · {_p.get('call_sign','')}<br>"
+        f"DWT&nbsp;<b>{int(_p['dwt']):,}</b> · LOA&nbsp;{_p['loa']}m · Beam&nbsp;{_p['beam']}m<br>"
+        f"Flag: {_p['flag']} · Built: {_p['year_built']}<br>"
+        f"Owner: {_p.get('owner','—')[:30]}<br>"
+        f"<span style='color:#94a3b8'>Source: {_src}</span>"
+        f"{_warn_label}"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    _cb1, _cb2 = st.sidebar.columns(2)
+    if _cb1.button("✅ Apply", key="imo_apply_btn"):
+        st.session_state["imo_number"]  = str(_p["imo"])
+        st.session_state["vessel_name"] = _p["name"]
+        st.session_state["vessel_imo"]  = _p["imo"]
+        st.session_state["api_dwt"]     = float(_p["dwt"])
+        st.session_state["api_loa"]     = float(_p["loa"])
+        st.session_state["api_beam"]    = float(_p["beam"])
+        st.session_state["api_year"]    = _p["year_built"]
+        st.session_state["api_flag"]    = _p["flag"]
+        st.session_state.pop("_pending_imo", None)
+        st.rerun()
+    if _cb2.button("✗ Discard", key="imo_discard_btn"):
+        st.session_state.pop("_pending_imo", None)
+        st.rerun()
 
 if st.session_state.get("vessel_name"):
     st.sidebar.markdown(
