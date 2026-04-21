@@ -520,11 +520,19 @@ if st.session_state.get("_pending_imo"):
         st.session_state["imo_number"]  = str(_p["imo"])
         st.session_state["vessel_name"] = _p["name"]
         st.session_state["vessel_imo"]  = _p["imo"]
+        # api_ keys (used as value= defaults)
         st.session_state["api_dwt"]     = float(_p["dwt"])
         st.session_state["api_loa"]     = float(_p["loa"])
         st.session_state["api_beam"]    = float(_p["beam"])
         st.session_state["api_year"]    = _p["year_built"]
         st.session_state["api_flag"]    = _p["flag"]
+        # widget keys — must be set directly so number_inputs update
+        if _p["dwt"]:
+            st.session_state["vessel_dwt"]  = int(float(_p["dwt"]))
+        if _p["loa"]:
+            st.session_state["vessel_loa"]  = int(float(_p["loa"]))
+        if _p["beam"]:
+            st.session_state["vessel_beam"] = int(float(_p["beam"]))
         st.session_state.pop("_pending_imo", None)
         st.rerun()
     if _cb2.button("✗ Discard", key="imo_discard_btn"):
@@ -4000,8 +4008,9 @@ with tabs[6]:
     vessel_beam    = _pv_vessel.beam          if _pv_vessel else 24.0
 
     # Summary funnel metrics
-    total_db   = 769
-    sea_region = 366
+    total_db       = 769
+    sea_region     = 378
+    far_east_added = 65
     accessible = sum(1 for v in PORT_SUITABILITY.values()
                      if v["status"] in ("EXCELLENT", "GOOD"))
     restricted = sum(1 for v in PORT_SUITABILITY.values()
@@ -4010,30 +4019,56 @@ with tabs[6]:
                      if v["status"] == "NOT_SUITABLE")
 
     pvc1, pvc2, pvc3, pvc4, pvc5 = st.columns(5)
-    pvc1.metric("Total database",  total_db,
-                help="All SEA + Far East ports in restriction database")
-    pvc2.metric("SEA region",      sea_region,
-                help="After removing China, Japan, Korea")
-    pvc3.metric("✅ Active",        accessible,
+    pvc1.metric("Total database",    total_db,
+                help="Global maritime port database")
+    pvc2.metric("SEA + Far East",    sea_region + far_east_added,
+                help=f"SEA ({sea_region}) + China/Japan/Korea/TW/HK ({far_east_added})")
+    pvc3.metric("✅ Active",          accessible,
                 help="EXCELLENT + GOOD — vessel enters fully laden")
-    pvc4.metric("⚠️ Restricted",   restricted,
+    pvc4.metric("⚠️ Restricted",     restricted,
                 help="Conditional entry — tidal, draft limits")
-    pvc5.metric("❌ Eliminated",    blocked,
+    pvc5.metric("❌ Eliminated",      blocked,
                 help="Vessel cannot enter under any condition")
 
     st.markdown("---")
 
-    pv_sf, pv_nf = st.columns([1, 2])
+    _PV_REGION_MAP = {
+        "China":          {"Shanghai","Lianyungang","Meizhou","Qinzhou","Rizhao","Machong",
+                           "Saiqi","Yangjiang","Tieshan","Lanshan","Nantong","Taicang",
+                           "Nanjing","Chaozhou","Haimen (Guangdong Province)","Yuhuan",
+                           "Xiamen","Gaolan","Shanwei","Fangcheng","Luoyuanwan","Guangzhou",
+                           "Zhanjiang","Yangpu (Hainan)","Ningde","Kemen","Caofeidian",
+                           "Weifang","Changzhou","Jinzhou","Jiazi","Bayuquan","Zhenjiang",
+                           "Ningbo (incl Zhoushan)","Huanghua","Dalian","Fuzhou (incl Fuqing)",
+                           "Huizhou","Zhangjiagang","Dongguan"},
+        "Japan":          {"Tachibana","Hekinan","Kawanoe (Iyomishima)","Toyama","Sakaiminato",
+                           "Hachinohe","Kobe","Tokuyama","Matsuura","Tonda","Nagoya",
+                           "Yokohama","Osaka","Kashima","Ishinomaki"},
+        "Korea South":    {"Kwangyang","Dangjin","Hosan","Samcheon Po","Incheon","Boryeong",
+                           "Daesan","Gunsan","Ulsan","Pyeongtaek"},
+        "Taiwan/HK":      {"Taichung","Kaohsiung","Lingkou","Ho Ping","Hong Kong"},
+        "Bangladesh":     {"Chittagong","Matarbari","Mongla"},
+        "Southeast Asia": None,  # everything else
+    }
+
+    pv_sf, pv_rf, pv_nf = st.columns([1, 1, 2])
     with pv_sf:
         status_filter = st.selectbox(
             "Filter by status",
             ["All", "✅ EXCELLENT", "🔵 GOOD", "⚠️ RESTRICTED", "❌ NOT SUITABLE"],
             key="pv_status_filter",
         )
+    with pv_rf:
+        region_filter = st.selectbox(
+            "Filter by region",
+            ["All regions", "Southeast Asia", "China", "Japan",
+             "Korea South", "Taiwan/HK", "Bangladesh"],
+            key="pv_region_filter",
+        )
     with pv_nf:
         country_filter = st.text_input(
             "Search port name", key="pv_country_filter",
-            placeholder="e.g. Samarinda, Bangkok, Phnom Penh…"
+            placeholder="e.g. Samarinda, Bangkok, Rizhao, Nagoya…"
         )
 
     # Build table rows
@@ -4056,6 +4091,22 @@ with tabs[6]:
             continue
         if country_filter and country_filter.lower() not in port.lower():
             continue
+        # Region filter
+        if region_filter != "All regions":
+            _rf_key = region_filter if region_filter != "Bangladesh" else "Bangladesh"
+            _rf_ports = _PV_REGION_MAP.get(_rf_key)
+            if _rf_ports is not None:
+                if port not in _rf_ports:
+                    continue
+            else:
+                # "Southeast Asia" = all ports NOT in any Far East group
+                _all_fe = (
+                    _PV_REGION_MAP["China"] | _PV_REGION_MAP["Japan"] |
+                    _PV_REGION_MAP["Korea South"] | _PV_REGION_MAP["Taiwan/HK"] |
+                    _PV_REGION_MAP["Bangladesh"]
+                )
+                if port in _all_fe:
+                    continue
 
         max_draft = info.get("max_draft", 99.0)
         if status == "NOT_SUITABLE":

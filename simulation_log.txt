@@ -3,147 +3,141 @@
 ───────────────────────────────────────────────────────────────────
 
 ── SIMULATION RUN LOG ───────────────────────────────────────────
-Timestamp: 2026-04-17 11:23:15
+Timestamp: 2026-04-20 21:39:56
 Iterations: 1,000
 Algorithm: Monte Carlo Only
 Random seed: None (random)
-Duration: 56.3 seconds
+Duration: 88.6 seconds
 
 ── VESSEL CONFIG ────────────────────────────────────────────────
-DWT: 24,228 MT
-DWCC: 20,593 MT
+DWT: 19,625 MT
+DWCC: 16,681 MT
 Draft laden: 9.5m | Draft ballast: 5.5m
-LOA: 147m | Beam: 25m
+LOA: 157m | Beam: 25m
 Speed laden: 11.0 kn | Speed ballast: 11.5 kn
 Charter hire: $9,000/day
 LSFO: $560/MT | MGO: $780/MT
 
 ── PORT VALIDATION SUMMARY ──────────────────────────────────────
 Total ports in D1 matrix: 70
-Active ports in simulation: 69
-Ports blocked (NOT_SUITABLE): Kampot, Koh Kong, Phnom Penh
-Ports restricted: Bangkok (Khlong Toei), Dili, Gresik, Mongla, Padang, Samarinda, Songkhla, Tarakan Island, Yangon
+Active ports in simulation: 70
+Ports blocked (NOT_SUITABLE): Phnom Penh
+Ports restricted: Bangkok, Dili, Mongla, Samarinda, Songkhla, Yangon
 
 ── DATA FILTER SUMMARY ──────────────────────────────────────────
-Total routes in D1 matrix: 4,096
-After Intra-SEA filter: 4,096 (all routes confirmed SEA region)
-After Break-Bulk filter: 3,584
-After port validation filter: 3,584
-Final routes used: 3,411
-Categories: Coal (1,338 = 39.2%), Dry Bulk (938 = 27.5%), Steel/Metal (476 = 14.0%), Agri-Bulk (439 = 12.9%), Fertilizers (220 = 6.4%)
+Total routes in D1 matrix: 4,134
+After Intra-SEA filter: 4,134 (all routes confirmed SEA region)
+After Break-Bulk filter: 3,616
+After port validation filter: 3,616
+Final routes used: 3,505
+Categories: Coal (1,370 = 39.1%), Dry Bulk (988 = 28.2%), Steel/Metal (481 = 13.7%), Agri-Bulk (444 = 12.7%), Fertilizers (222 = 6.3%)
 
 ── SIMULATION RESULTS ───────────────────────────────────────────
-Best programme profit: $2,329,316
-Mean profit (all iters): $1,504,728
-P10 (worst 10%): $1,165,799
-P90 (best 10%): $1,846,314
-% Profitable programmes: 100.0%
-Mean TCE: $14,389/day
-Mean ballast ratio (top progs): 13.0%
+Best programme profit: $1,316,161
+Mean profit (all iters): $593,764
+P10 (worst 10%): $285,834
+P90 (best 10%): $913,611
+% Profitable programmes: 99.6%
+Mean TCE: $11,498/day
+Mean ballast ratio (top progs): 13.6%
 
 ── TOP PROGRAMME #1 ─────────────────────────────────────────────
-Total profit: $2,329,316
-Voyages: 14
-TCE: $16,941/day
-Ballast ratio: 13.9%
+Total profit: $1,316,161
+Voyages: 13
+TCE: $13,733/day
+Ballast ratio: 15.7%
 Algorithm: monte_carlo
 
-  Voyage 1: Taboneo - Banjarmasin → Koh Sichang | Steam Coal | 20,593 MT
-    Laden:   2,129 NM | 8.1 days | Freight: $21.47/MT | Revenue: $442,124
-    Ballast: 304 NM | 1.1 days | Ballast cost: $19,560
-    P&L: $149,255 | Charter hire: $156,615 | Bunker: $105,051
+  Voyage 1: Lumut (Malaysia) → Bontang | Steels | 16,681 MT
+    Laden:   2,170 NM | 8.2 days | Freight: $32.05/MT | Revenue: $534,632
+    Ballast: 273 NM | 1.0 days | Ballast cost: $16,834
+    P&L: $120,423 | Charter hire: $245,998 | Bunker: $124,569
 
-  Voyage 2: Koh Sichang → Bahudopi | Palm Kernel Expeller | 20,593 MT
-    Laden:   3,446 NM | 13.1 days | Freight: $32.87/MT | Revenue: $676,816
-    Ballast: 0 NM | 0.0 days | Ballast cost: $0
-    P&L: $233,777 | Charter hire: $245,380 | Bunker: $155,002
-    Hold cleaning: Steam Coal -> Palm Kernel Expeller → $3,000
-
-  Voyage 3: Muara Berau → Port Kelang | Sugar | 20,593 MT
-    Laden:   2,718 NM | 10.3 days | Freight: $35.35/MT | Revenue: $727,985
-    Ballast: 1,417 NM | 5.1 days | Ballast cost: $91,080
-    P&L: $238,411 | Charter hire: $262,907 | Bunker: $175,901
-    Hold cleaning: Palm Kernel Expeller -> Sugar → $1,000
-
-  Voyage 4: Port Kelang → Dung Quat | Sugar | 20,593 MT
-    Laden:   1,782 NM | 6.7 days | Freight: $25.68/MT | Revenue: $528,921
-    Ballast: 0 NM | 0.0 days | Ballast cost: $0
-    P&L: $201,891 | Charter hire: $180,314 | Bunker: $100,019
-
-  Voyage 5: Dung Quat → Bontang | Steels | 20,593 MT
-    Laden:   3,447 NM | 13.1 days | Freight: $38.21/MT | Revenue: $786,802
-    Ballast: 0 NM | 0.0 days | Ballast cost: $0
-    P&L: $249,746 | Charter hire: $309,108 | Bunker: $179,160
-    Hold cleaning: Sugar -> Steels → $1,000
-
-  Voyage 6: Kaliorang → Koh Sichang | Steam Coal | 20,593 MT
-    Laden:   2,085 NM | 7.9 days | Freight: $25.17/MT | Revenue: $518,228
-    Ballast: 233 NM | 0.8 days | Ballast cost: $15,003
-    P&L: $222,237 | Charter hire: $157,286 | Bunker: $101,330
+  Voyage 2: Samarinda → Toledo (Philippines) | Steam Coal | 16,681 MT
+    Laden:   1,228 NM | 4.7 days | Freight: $15.89/MT | Revenue: $265,102
+    Ballast: 110 NM | 0.4 days | Ballast cost: $6,790
+    P&L: $45,755 | Charter hire: $125,115 | Bunker: $62,296
     Hold cleaning: Steels -> Steam Coal → $1,500
 
-  Voyage 7: Ho Chi Minh City → Bontang | Palm Kernel Expeller | 20,593 MT
-    Laden:   2,329 NM | 8.8 days | Freight: $29.52/MT | Revenue: $607,934
-    Ballast: 849 NM | 3.1 days | Ballast cost: $54,612
-    P&L: $180,729 | Charter hire: $236,127 | Bunker: $145,171
-    Hold cleaning: Steam Coal -> Palm Kernel Expeller → $3,000
-
-  Voyage 8: Samarinda → Lumut (Malaysia) | Steam Coal | 20,593 MT
-    Laden:   2,156 NM | 8.2 days | Freight: $19.73/MT | Revenue: $406,267
-    Ballast: 110 NM | 0.4 days | Ballast cost: $7,085
-    P&L: $110,616 | Charter hire: $160,195 | Bunker: $100,796
-    Hold cleaning: Palm Kernel Expeller -> Steam Coal → $1,500
-
-  Voyage 9: Lumut (Malaysia) → Binh Thuan (Vinh Tan) | Palm Kernel Expeller | 20,593 MT
-    Laden:   1,556 NM | 5.9 days | Freight: $19.27/MT | Revenue: $396,742
+  Voyage 3: Toledo (Philippines) → Muara Banyuasin | Fertilizers | 16,681 MT
+    Laden:   2,573 NM | 9.7 days | Freight: $28.90/MT | Revenue: $482,081
     Ballast: 0 NM | 0.0 days | Ballast cost: $0
-    P&L: $83,143 | Charter hire: $180,931 | Bunker: $92,377
-    Hold cleaning: Steam Coal -> Palm Kernel Expeller → $3,000
+    P&L: $114,951 | Charter hire: $210,808 | Bunker: $110,392
+    Hold cleaning: Steam Coal -> Fertilizers → $8,000
 
-  Voyage 10: Lumut (Malaysia) → Manila | Palm Kernel Expeller | 20,593 MT
-    Laden:   2,658 NM | 10.1 days | Freight: $30.61/MT | Revenue: $630,307
-    Ballast: 1,556 NM | 5.6 days | Ballast cost: $100,030
-    P&L: $137,284 | Charter hire: $262,053 | Bunker: $178,604
+  Voyage 4: Lumut (Malaysia) → Naga (Cebu) | Palm Kernel Expeller | 16,681 MT
+    Laden:   2,672 NM | 10.1 days | Freight: $34.51/MT | Revenue: $575,713
+    Ballast: 686 NM | 2.5 days | Ballast cost: $42,300
+    P&L: $164,686 | Charter hire: $226,443 | Bunker: $133,059
+    Hold cleaning: Fertilizers -> Palm Kernel Expeller → $3,000
 
-  Voyage 11: Limay → Lumut (Malaysia) | Steam Coal | 20,593 MT
-    Laden:   2,628 NM | 10.0 days | Freight: $19.32/MT | Revenue: $397,863
-    Ballast: 137 NM | 0.5 days | Ballast cost: $8,796
-    P&L: $70,916 | Charter hire: $172,002 | Bunker: $116,134
-    Hold cleaning: Palm Kernel Expeller -> Steam Coal → $1,500
+  Voyage 5: Toledo (Philippines) → Lumut (Malaysia) | Fertilizers | 16,681 MT
+    Laden:   2,686 NM | 10.2 days | Freight: $24.48/MT | Revenue: $408,372
+    Ballast: 192 NM | 0.7 days | Ballast cost: $11,812
+    P&L: $33,282 | Charter hire: $210,786 | Bunker: $119,130
+    Hold cleaning: Palm Kernel Expeller -> Fertilizers → $3,000
 
-  Voyage 12: Lumut (Malaysia) → Bahudopi | Steels | 20,593 MT
-    Laden:   2,726 NM | 10.3 days | Freight: $33.90/MT | Revenue: $698,180
+  Voyage 6: Lumut (Malaysia) → Bontang | Palm Kernel Expeller | 16,681 MT
+    Laden:   2,170 NM | 8.2 days | Freight: $26.05/MT | Revenue: $434,475
     Ballast: 0 NM | 0.0 days | Ballast cost: $0
-    P&L: $214,109 | Charter hire: $283,847 | Bunker: $155,118
-    Hold cleaning: Steam Coal -> Steels → $1,500
+    P&L: $101,622 | Charter hire: $191,400 | Bunker: $98,877
+    Hold cleaning: Fertilizers -> Palm Kernel Expeller → $3,000
 
-  Voyage 13: Davao → Cai Mep | Copra | 20,593 MT
-    Laden:   3,265 NM | 12.4 days | Freight: $34.45/MT | Revenue: $709,391
-    Ballast: 1,035 NM | 3.8 days | Ballast cost: $66,558
-    P&L: $208,667 | Charter hire: $268,459 | Bunker: $181,801
-    Hold cleaning: Steels -> Copra → $1,000
+  Voyage 7: Davao → Ho Chi Minh City | Sugar | 16,681 MT
+    Laden:   3,296 NM | 12.5 days | Freight: $35.62/MT | Revenue: $594,191
+    Ballast: 1,020 NM | 3.7 days | Ballast cost: $62,849
+    P&L: $118,654 | Charter hire: $258,547 | Bunker: $162,613
+    Hold cleaning: Palm Kernel Expeller -> Sugar → $1,000
 
-  Voyage 14: Cai Mep → Vissai International Port | Steam Coal | 20,593 MT
-    Laden:   419 NM | 1.6 days | Freight: $9.30/MT | Revenue: $191,576
+  Voyage 8: Kuantan → Bahudopi | Palm Kernel Expeller | 16,681 MT
+    Laden:   2,764 NM | 10.5 days | Freight: $25.28/MT | Revenue: $421,718
+    Ballast: 846 NM | 3.1 days | Ballast cost: $52,109
+    P&L: $8,956 | Charter hire: $232,496 | Bunker: $140,942
+    Hold cleaning: Sugar -> Palm Kernel Expeller → $1,000
+
+  Voyage 9: Bahudopi → Jakarta (Tanjung Priok) | Steels | 16,681 MT
+    Laden:   2,585 NM | 9.8 days | Freight: $29.99/MT | Revenue: $500,245
     Ballast: 0 NM | 0.0 days | Ballast cost: $0
-    P&L: $28,536 | Charter hire: $92,670 | Bunker: $38,711
-    Hold cleaning: Copra -> Steam Coal → $1,000
+    P&L: $69,576 | Charter hire: $256,836 | Bunker: $129,455
+    Hold cleaning: Palm Kernel Expeller -> Steels → $1,000
+
+  Voyage 10: Jakarta (Tanjung Priok) → Nghi Son | Steels | 16,681 MT
+    Laden:   2,326 NM | 8.8 days | Freight: $32.38/MT | Revenue: $540,072
+    Ballast: 0 NM | 0.0 days | Ballast cost: $0
+    P&L: $123,695 | Charter hire: $243,493 | Bunker: $121,588
+
+  Voyage 11: Lumut (Malaysia) → General Santos City | Steels | 16,681 MT
+    Laden:   2,904 NM | 11.0 days | Freight: $43.10/MT | Revenue: $718,930
+    Ballast: 2,226 NM | 8.1 days | Ballast cost: $137,159
+    P&L: $130,701 | Charter hire: $330,257 | Bunker: $202,531
+
+  Voyage 12: Toledo (Philippines) → Port Kelang | Fertilizers | 16,681 MT
+    Laden:   2,668 NM | 10.1 days | Freight: $30.70/MT | Revenue: $512,087
+    Ballast: 840 NM | 3.0 days | Ballast cost: $51,764
+    P&L: $90,710 | Charter hire: $230,136 | Bunker: $138,090
+    Hold cleaning: Steels -> Fertilizers → $1,000
+
+  Voyage 13: Lumut (Malaysia) → Mariveles | Palm Kernel Expeller | 16,681 MT
+    Laden:   2,620 NM | 9.9 days | Freight: $34.21/MT | Revenue: $570,622
+    Ballast: 146 NM | 0.5 days | Ballast cost: $9,021
+    P&L: $193,150 | Charter hire: $208,178 | Bunker: $116,058
+    Hold cleaning: Fertilizers -> Palm Kernel Expeller → $3,000
 
 
 ── CARGO MIX (top programme #1) ─────────────────────────────────
-  Steam Coal                     5 voyages (35.7%)
-  Palm Kernel Expeller           4 voyages (28.6%)
-  Sugar                          2 voyages (14.3%)
-  Steels                         2 voyages (14.3%)
-  Copra                          1 voyages (7.1%)
+  Steels                         4 voyages (30.8%)
+  Palm Kernel Expeller           4 voyages (30.8%)
+  Fertilizers                    3 voyages (23.1%)
+  Steam Coal                     1 voyages (7.7%)
+  Sugar                          1 voyages (7.7%)
 
 ── DISTANCE MATRIX ──────────────────────────────────────────────
   Source: Searoute EU maritime routing network (real sea distances)
-  Matrix: 113 ports × 113 ports = 12,656 routes
+  Matrix: 407 ports × 407 ports = 165,242 routes
 
 ── ERRORS / WARNINGS ────────────────────────────────────────────
   No errors or warnings recorded.
 
 ───────────────────────────────────────────────────────────────────
-  Log generated: 2026-04-17 11:23:15
+  Log generated: 2026-04-20 21:39:56
 ───────────────────────────────────────────────────────────────────

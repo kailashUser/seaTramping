@@ -367,7 +367,7 @@ def build_leg_library(ports_df, dist_matrix, intra_data):
                     'origin_port': origin, 'dest_port': dest,
                     'origin_country': port_countries[i], 'dest_country': port_countries[j],
                     'commodity': commodity, 'category': cat,
-                    'direction': 'Intra-SEA',
+                    'direction': 'Intra-SEA',  # overwritten after filter below
                     'distance_nm': dist, 'status': status,
                     'annual_volume_mt': annual_vol,
                     'freight_rate_usd_mt': freight_rate,
@@ -391,22 +391,31 @@ def build_leg_library(ports_df, dist_matrix, intra_data):
 
     _n_raw = len(legs_df)
 
-    # Fix 1a — keep only genuine Intra-SEA routes by country membership.
-    # All generated legs carry direction='Intra-SEA' as a hardcoded tag so
-    # a string equality check is a no-op.  Instead, filter on country: both
-    # origin AND destination must be within the SEA tramping region.
-    # This removes any legs involving ports tagged to non-SEA countries
-    # (e.g. Japan, India, Europe) that may have slipped into the port DB.
-    _SEA_COUNTRIES = {
+    # Fix 1a — SEA load ports + Far East discharge ports.
+    # LOAD ports: SEA only (vessel loads cargo in SEA region).
+    # DISCHARGE ports: SEA + Far East (China, Japan, Korea, Taiwan, HK).
+    # This reflects real Handysize tramping: load coal/nickel/ore in SEA,
+    # discharge in Far East, ballast back for next cargo.
+    _SEA_LOAD_COUNTRIES = {
         'Indonesia', 'Philippines', 'Vietnam', 'Malaysia', 'Thailand',
         'Singapore', 'Bangladesh', 'Myanmar', 'Cambodia', 'Timor-Leste',
         'Brunei', 'Sri Lanka',
     }
+    _FAR_EAST_COUNTRIES = {
+        'China', 'Japan', 'Korea South', 'Hong Kong',
+        'Taiwan, Province of China',
+    }
+    _ALL_DISCHARGE_COUNTRIES = _SEA_LOAD_COUNTRIES | _FAR_EAST_COUNTRIES
     legs_df = legs_df[
-        legs_df['origin_country'].isin(_SEA_COUNTRIES) &
-        legs_df['dest_country'].isin(_SEA_COUNTRIES)
+        legs_df['origin_country'].isin(_SEA_LOAD_COUNTRIES) &
+        legs_df['dest_country'].isin(_ALL_DISCHARGE_COUNTRIES)
     ]
     _n_intra = len(legs_df)
+
+    # Tag direction: Export from SEA if discharging in Far East, else Intra-SEA
+    legs_df['direction'] = legs_df['dest_country'].apply(
+        lambda c: 'Export from SEA' if c in _FAR_EAST_COUNTRIES else 'Intra-SEA'
+    )
 
     # Fix 1b — remove Break-Bulk and Project Cargo (slow cargo, distorts port stay)
     legs_df = legs_df[~legs_df['category'].isin(['Break-Bulk'])]
@@ -423,12 +432,8 @@ def build_leg_library(ports_df, dist_matrix, intra_data):
         pass
     _n_no_blocked = len(legs_df)
 
-    # Fix 1d — country-level exclusion (Cambodia: shallow river ports, no 20K DWT access)
-    _EXCLUDED_COUNTRIES = {'Cambodia'}
-    legs_df = legs_df[
-        ~legs_df['origin_country'].isin(_EXCLUDED_COUNTRIES) &
-        ~legs_df['dest_country'].isin(_EXCLUDED_COUNTRIES)
-    ]
+    # Fix 1d — Cambodia excluded as LOAD port only (shallow river ports, no 20K DWT access)
+    legs_df = legs_df[~legs_df['origin_country'].isin({'Cambodia'})]
 
     # Fix 2 — commodity restrictions for restricted ports.
     # Only certain commodities make operational sense at each port.
