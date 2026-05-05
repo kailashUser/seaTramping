@@ -149,6 +149,39 @@ CARGO_RATE = {
     'Fertilizers': {'load': 4000, 'disch': 3500},
 }
 
+# Flat port stay days per commodity (load port + discharge port combined)
+# Based on real operator experience — used instead of cargo-rate calculation
+DEFAULT_PORT_STAY_DAYS = {
+    'Steam Coal':           3.0,
+    'Coking Coal':          3.0,
+    'Anthracite':           3.0,
+    'Petroleum Coke':       3.0,
+    'Nickel Ore':           3.5,
+    'Iron Ore':             3.0,
+    'Bauxite':              3.0,
+    'Clinker':              3.5,
+    'Limestone':            3.5,
+    'Gypsum':               3.5,
+    'Slag':                 3.5,
+    'Aggregates':           3.5,
+    'Salt':                 3.5,
+    'Palm Kernel Expeller': 4.0,
+    'Sugar':                4.0,
+    'Rice':                 4.0,
+    'Copra':                4.0,
+    'Grain':                3.5,
+    'Wood Chips':           3.5,
+    'Timber':               4.0,
+    'Steels':               5.0,
+    'Scrap':                4.5,
+    'Fertilizers':          4.0,
+    'Cement':               3.5,
+    'Cement Bagged':        4.0,
+    'Project Cargo':        5.0,
+    'Dry Bulk':             3.5,
+}
+_PORT_STAY_FALLBACK = 3.5
+
 
 def haversine_nm(lat1, lon1, lat2, lon2):
     R = 3440.065
@@ -362,6 +395,10 @@ def build_leg_library(ports_df, dist_matrix, intra_data):
                 load_costs_v2 = {'load_nav': load_pc, 'load_steve': 0}
                 disch_costs_v2 = {'disch_nav': disch_pc, 'disch_steve': 0}
 
+                _port_stay = DEFAULT_PORT_STAY_DAYS.get(
+                    commodity,
+                    DEFAULT_PORT_STAY_DAYS.get(cat, _PORT_STAY_FALLBACK),
+                )
                 legs.append({
                     'origin_id': i, 'dest_id': j,
                     'origin_port': origin, 'dest_port': dest,
@@ -383,6 +420,7 @@ def build_leg_library(ports_df, dist_matrix, intra_data):
                     'load_congestion_std':  load_cong_std, 'disch_congestion_std': disch_cong_std,
                     'load_steve_per_mt':   steve_load,  'disch_steve_per_mt':  steve_disch,
                     'load_rate_mt_day': cargo_rate['load'], 'disch_rate_mt_day': cargo_rate['disch'],
+                    'port_stay_days': _port_stay,
                 })
 
     legs_df = pd.DataFrame(legs)

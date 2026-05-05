@@ -3557,7 +3557,8 @@ with tabs[5]:
 <style>
 * {{ margin:0; padding:0; box-sizing:border-box; }}
 body {{ background:#0a1628; font-family:-apple-system,sans-serif; }}
-#map {{ width:100%; height:480px; border-radius:10px; overflow:hidden; }}
+#map-wrap {{ position:relative; width:100%; height:480px; }}
+#map {{ position:absolute; inset:0; border-radius:10px; overflow:hidden; }}
 .controls {{ display:flex; align-items:center; gap:8px; margin:8px 0 4px; flex-wrap:wrap; }}
 .btn {{ background:#1a3a5c; color:white; border:none; padding:7px 16px;
         border-radius:8px; font-size:12px; cursor:pointer; min-width:80px; }}
@@ -3574,10 +3575,62 @@ select {{ padding:6px 10px; border-radius:8px; border:1px solid #334155;
 .stat-lbl {{ font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:.05em; }}
 .stat-val {{ font-size:12px; font-weight:500; color:#e2e8f0; margin-top:2px;
              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+#route-popup {{
+  position:absolute; z-index:1000;
+  background:rgba(15,23,42,0.97);
+  border:1px solid rgba(55,138,221,0.45);
+  border-radius:12px; padding:14px 16px;
+  min-width:260px;
+  font-family:-apple-system,sans-serif;
+  color:#e2e8f0; display:none;
+  box-shadow:0 8px 32px rgba(0,0,0,0.5);
+  pointer-events:all;
+}}
+.pp-title {{ font-size:13px; font-weight:700; color:#f59e0b; margin-bottom:10px; }}
+.pp-ports {{ display:grid; grid-template-columns:40px 1fr; gap:4px 8px; margin-bottom:10px; font-size:12px; }}
+.pp-from-label {{ color:#22c55e; font-weight:600; font-size:10px; text-transform:uppercase; }}
+.pp-to-label   {{ color:#ef4444; font-weight:600; font-size:10px; text-transform:uppercase; }}
+.pp-port-name  {{ color:#e2e8f0; }}
+.pp-divider    {{ border:none; border-top:1px solid rgba(255,255,255,0.08); margin:8px 0; }}
+.pp-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:6px; }}
+.pp-item-label {{ font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:.05em; margin-bottom:2px; }}
+.pp-item-value {{ font-size:12px; font-weight:500; color:#e2e8f0; }}
+.pp-pl-pos {{ color:#22c55e; }}
+.pp-pl-neg {{ color:#ef4444; }}
+.pp-close {{ float:right; background:none; border:none; color:#64748b; cursor:pointer; font-size:13px; }}
+@keyframes ripple {{
+  0%   {{ transform:scale(1); opacity:0.8; }}
+  100% {{ transform:scale(3); opacity:0; }}
+}}
+@keyframes pulse {{ 0%,100% {{ opacity:1 }} 50% {{ opacity:0.4 }} }}
 </style>
 </head>
 <body>
-<div id="map"></div>
+<div id="map-wrap">
+  <div id="map"></div>
+  <div id="vessel-icon" style="position:absolute;z-index:999;pointer-events:none;transform:translate(-50%,-50%);display:none">
+    <div style="position:relative;width:48px;height:48px">
+      <div id="vessel-ripple1" style="position:absolute;inset:0;border-radius:50%;border:2px solid rgba(245,158,11,0.7);animation:ripple 2s ease-out infinite"></div>
+      <div id="vessel-ripple2" style="position:absolute;inset:0;border-radius:50%;border:2px solid rgba(245,158,11,0.4);animation:ripple 2s ease-out infinite 0.7s"></div>
+      <div style="position:absolute;inset:8px;display:flex;align-items:center;justify-content:center">
+        <svg width="32" height="32" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <polygon points="32,4 56,52 32,44 8,52" fill="#f59e0b" stroke="#92400e" stroke-width="2"/>
+          <rect x="30" y="10" width="4" height="18" fill="#78350f" rx="1"/>
+          <rect x="24" y="18" width="16" height="3" fill="#78350f" rx="1"/>
+          <ellipse cx="32" cy="46" rx="14" ry="4" fill="#b45309" opacity="0.4"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+  <canvas id="route-overlay" style="position:absolute;inset:0;z-index:500;pointer-events:none;background:transparent;display:block;"></canvas>
+  <div id="route-popup">
+    <button class="pp-close" onclick="closeRoutePopup()">&#10005;</button>
+    <div class="pp-title" id="pp-title-el"></div>
+    <div class="pp-ports" id="pp-ports-el"></div>
+    <hr class="pp-divider">
+    <div class="pp-grid" id="pp-grid-el"></div>
+  </div>
+</div>
 <div class="controls">
   <button class="btn" id="btnPlay" onclick="togglePlay()">&#9654; Play</button>
   <button class="btn-sec" onclick="resetAnim()">&#8635; Reset</button>
@@ -3690,14 +3743,7 @@ traces.push({{
   opacity:1, hoverinfo:'skip', showlegend:false, name:'active_arc'
 }});
 
-// 5. Vessel marker
-const VESSEL_IDX = traces.length;
-traces.push({{
-  type:'scattermapbox',
-  lat:[CENTRE.lat], lon:[CENTRE.lon], mode:'markers',
-  marker:{{size:14, color:'#f59e0b', symbol:'circle'}},
-  hoverinfo:'skip', showlegend:false, name:'vessel'
-}});
+// (vessel marker removed — replaced by #vessel-icon SVG overlay)
 
 const layout = {{
   mapbox:{{
@@ -3716,12 +3762,174 @@ const layout = {{
 
 Plotly.newPlot('map', traces, layout, {{
   responsive:true, displayModeBar:false, scrollZoom:true
+}}).then(function() {{
+  resizeOverlay();
+  updateProjectedRoutes();
+  document.getElementById('map').on('plotly_relayout', function() {{
+    projectedRoutes = null;
+  }});
 }});
 
 // Animation state
 let playing=false, spd=60, curV=0, t=0, cumDays=0;
 let phase='ballast';
 let lastTs=null, raf=null;
+
+// ── Vessel SVG icon overlay ──────────────────────────────────────────────
+function getMapboxMap() {{
+  try {{ return document.getElementById('map')._fullLayout.mapbox._subplot.map; }}
+  catch(e) {{ return null; }}
+}}
+
+function bearing(lat1, lon1, lat2, lon2) {{
+  const toR = Math.PI/180;
+  const dLon = (lon2 - lon1) * toR;
+  const y = Math.sin(dLon) * Math.cos(lat2 * toR);
+  const x = Math.cos(lat1*toR)*Math.sin(lat2*toR) - Math.sin(lat1*toR)*Math.cos(lat2*toR)*Math.cos(dLon);
+  return (Math.atan2(y, x) * 180/Math.PI + 360) % 360;
+}}
+
+function positionVesselIcon(lat, lng, bearingDeg) {{
+  const icon = document.getElementById('vessel-icon');
+  const mbMap = getMapboxMap();
+  if (!mbMap || !icon) return;
+  const pt = mbMap.project([lng, lat]);
+  const mapRect  = document.getElementById('map').getBoundingClientRect();
+  const wrapRect = document.getElementById('map-wrap').getBoundingClientRect();
+  icon.style.left = (pt.x + mapRect.left - wrapRect.left) + 'px';
+  icon.style.top  = (pt.y + mapRect.top  - wrapRect.top)  + 'px';
+  icon.style.transform = `translate(-50%,-50%) rotate(${{bearingDeg}}deg)`;
+  icon.style.display = 'block';
+}}
+
+// ── Route overlay canvas + hit detection ────────────────────────────────
+const routeOverlay = document.getElementById('route-overlay');
+
+function resizeOverlay() {{
+  const rect = document.getElementById('map').getBoundingClientRect();
+  if (rect.width > 0) {{ routeOverlay.width = rect.width; routeOverlay.height = rect.height; }}
+}}
+window.addEventListener('resize', resizeOverlay);
+
+let projectedRoutes = null;
+function updateProjectedRoutes() {{
+  const mbMap = getMapboxMap();
+  if (!mbMap) {{ projectedRoutes = null; return; }}
+  projectedRoutes = VOYAGES.map(v => {{
+    const laden   = (v.lats||[]).map((lat,i) => mbMap.project([v.lons[i], lat]));
+    const ballast = (v.ballast_lats||[]).map((lat,i) => mbMap.project([v.ballast_lons[i], lat]));
+    return {{laden, ballast}};
+  }});
+}}
+
+function ptToSegDist(px,py,ax,ay,bx,by) {{
+  const dx=bx-ax, dy=by-ay, lenSq=dx*dx+dy*dy;
+  if(lenSq===0) return Math.hypot(px-ax,py-ay);
+  const t=Math.max(0,Math.min(1,((px-ax)*dx+(py-ay)*dy)/lenSq));
+  return Math.hypot(px-(ax+t*dx),py-(ay+t*dy));
+}}
+
+function getRouteAtPoint(mx,my) {{
+  if(!projectedRoutes) updateProjectedRoutes();
+  if(!projectedRoutes) return null;
+  const HIT=12;
+  for(let vi=0;vi<VOYAGES.length;vi++) {{
+    const pr=projectedRoutes[vi];
+    for(let j=0;j<pr.laden.length-1;j++) {{
+      if(ptToSegDist(mx,my,pr.laden[j].x,pr.laden[j].y,pr.laden[j+1].x,pr.laden[j+1].y)<HIT)
+        return {{vi,leg:'laden'}};
+    }}
+    for(let j=0;j<pr.ballast.length-1;j++) {{
+      if(ptToSegDist(mx,my,pr.ballast[j].x,pr.ballast[j].y,pr.ballast[j+1].x,pr.ballast[j+1].y)<HIT)
+        return {{vi,leg:'ballast'}};
+    }}
+  }}
+  return null;
+}}
+
+let hoveredRoute=null;
+function highlightRoute(vi,leg,on) {{
+  const data=document.getElementById('map').data||[];
+  const nm=(leg==='laden'?'arc_':'ballast_')+vi;
+  const idx=data.findIndex(t=>t.name===nm);
+  if(idx<0) return;
+  if(on) {{
+    Plotly.restyle('map',{{'line.width':[5],opacity:[0.9]}},[idx]);
+  }} else {{
+    const v=VOYAGES[vi], isL=(leg==='laden');
+    const col=isL?(v.pl>=0?'#22c55e':'#ef4444'):'rgba(148,163,184,0.25)';
+    Plotly.restyle('map',{{'line.width':[isL?2:1.5],'line.color':[col],opacity:[isL?0.22:1]}},[idx]);
+  }}
+}}
+
+function fmtN(n) {{ return (n||0).toLocaleString('en-US',{{maximumFractionDigits:0}}); }}
+function fmtM(n) {{ return '$'+Math.abs(n||0).toLocaleString('en-US',{{maximumFractionDigits:0}}); }}
+
+function showRoutePopup(vi,mx,my) {{
+  const v=VOYAGES[vi];
+  const popup=document.getElementById('route-popup');
+  const wrapEl=document.getElementById('map-wrap');
+  const mapRect=document.getElementById('map').getBoundingClientRect();
+  const wrapRect=wrapEl.getBoundingClientRect();
+  const liveBadge=(vi===curV)
+    ? '<span style="background:#1d4ed8;color:#bfdbfe;font-size:9px;padding:2px 7px;border-radius:20px;margin-left:6px;animation:pulse 1.5s ease-in-out infinite">&#9679; LIVE</span>'
+    : '';
+  document.getElementById('pp-title-el').innerHTML='&#128674; Voyage '+(vi+1)+liveBadge;
+  document.getElementById('pp-ports-el').innerHTML=
+    '<span class="pp-from-label">FROM</span><span class="pp-port-name">'+v.from+'</span>'+
+    '<span class="pp-to-label">TO</span><span class="pp-port-name">'+v.to+'</span>';
+  const rev=(v.rate||0)*(v.cargo||0);
+  const plCls=v.pl>=0?'pp-pl-pos':'pp-pl-neg';
+  const plSign=v.pl>=0?'+':'-';
+  document.getElementById('pp-grid-el').innerHTML=
+    '<div><div class="pp-item-label">Cargo</div><div class="pp-item-value">'+v.comm+'</div></div>'+
+    '<div><div class="pp-item-label">Quantity</div><div class="pp-item-value">'+fmtN(v.cargo)+' MT</div></div>'+
+    '<div><div class="pp-item-label">Distance</div><div class="pp-item-value">'+fmtN(v.nm)+' NM</div></div>'+
+    '<div><div class="pp-item-label">Days</div><div class="pp-item-value">'+v.laden_days+'d laden + '+v.ballast_days+'d ballast</div></div>'+
+    '<div><div class="pp-item-label">Rate</div><div class="pp-item-value">$'+v.rate+' / MT</div></div>'+
+    '<div><div class="pp-item-label">Revenue</div><div class="pp-item-value">'+fmtM(rev)+'</div></div>'+
+    '<div style="grid-column:1/-1"><div class="pp-item-label">P&amp;L</div>'+
+    '<div class="pp-item-value '+plCls+'">'+plSign+fmtM(v.pl)+'</div></div>';
+  popup.style.display='block';
+  const cx=mx+(mapRect.left-wrapRect.left), cy=my+(mapRect.top-wrapRect.top);
+  const pw=popup.offsetWidth||260, ph=popup.offsetHeight||200;
+  let left=cx+14, top=cy-10;
+  if(left+pw>wrapEl.offsetWidth)  left=cx-pw-14;
+  if(top+ph>wrapEl.offsetHeight)  top=cy-ph-10;
+  popup.style.left=Math.max(0,left)+'px';
+  popup.style.top =Math.max(0,top)+'px';
+}}
+
+function closeRoutePopup() {{
+  document.getElementById('route-popup').style.display='none';
+  if(hoveredRoute) {{ highlightRoute(hoveredRoute.vi,hoveredRoute.leg,false); hoveredRoute=null; }}
+}}
+
+// Map mouse events
+const _mapEl=document.getElementById('map');
+_mapEl.addEventListener('mousemove',function(e) {{
+  if(document.getElementById('route-popup').contains(e.target)) return;
+  const r=_mapEl.getBoundingClientRect();
+  const mx=e.clientX-r.left, my=e.clientY-r.top;
+  const hit=getRouteAtPoint(mx,my);
+  if(hit) {{
+    _mapEl.style.cursor='pointer';
+    if(!hoveredRoute||hoveredRoute.vi!==hit.vi||hoveredRoute.leg!==hit.leg) {{
+      if(hoveredRoute) highlightRoute(hoveredRoute.vi,hoveredRoute.leg,false);
+      hoveredRoute=hit; highlightRoute(hit.vi,hit.leg,true);
+    }}
+  }} else {{
+    _mapEl.style.cursor='';
+    if(hoveredRoute) {{ highlightRoute(hoveredRoute.vi,hoveredRoute.leg,false); hoveredRoute=null; }}
+  }}
+}});
+_mapEl.addEventListener('click',function(e) {{
+  if(document.getElementById('route-popup').contains(e.target)) return;
+  const r=_mapEl.getBoundingClientRect();
+  const hit=getRouteAtPoint(e.clientX-r.left,e.clientY-r.top);
+  if(hit) showRoutePopup(hit.vi,e.clientX-r.left,e.clientY-r.top);
+  else    closeRoutePopup();
+}});
 
 function setSpd(v) {{ spd=parseInt(v); }}
 
@@ -3737,7 +3945,7 @@ function resetAnim() {{
   if(raf){{ cancelAnimationFrame(raf); raf=null; }}
   curV=0; t=0; cumDays=0; phase='ballast';
   Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_BALLAST_IDX, ACTIVE_ARC_IDX]);
-  Plotly.restyle('map', {{lat:[[CENTRE.lat]], lon:[[CENTRE.lon]]}}, [VESSEL_IDX]);
+  document.getElementById('vessel-icon').style.display='none';
   document.getElementById('scrub').value=0;
   updateHUD();
 }}
@@ -3800,12 +4008,19 @@ function advance(dt) {{
     Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_ARC_IDX]);
   }}
 
-  // Update vessel position
+  // Position vessel SVG icon
   const arcLat = isBallastPhase ? v2.ballast_lats : v2.lats;
   const arcLon = isBallastPhase ? v2.ballast_lons : v2.lons;
   if (arcLat && arcLat.length) {{
     const idx = Math.min(Math.floor(progress * arcLat.length), arcLat.length-1);
-    Plotly.restyle('map', {{lat:[[arcLat[idx]]], lon:[[arcLon[idx]]]}}, [VESSEL_IDX]);
+    const lat = arcLat[idx], lon = arcLon[idx];
+    let brg = 0;
+    if (idx > 0) {{
+      brg = bearing(arcLat[idx-1], arcLon[idx-1], lat, lon);
+    }} else if (arcLat.length > 1) {{
+      brg = bearing(lat, lon, arcLat[1], arcLon[1]);
+    }}
+    positionVesselIcon(lat, lon, brg);
   }}
 
   // Scrub bar

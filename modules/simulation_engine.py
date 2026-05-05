@@ -54,42 +54,46 @@ except ImportError:
 
 @dataclass
 class VesselConfig:
-    dwt: float = 17556
-    dwcc: float = 15000                # Deadweight Cargo Capacity (max cargo MT)
+    dwt: float = 24228
+    dwcc: float = 20593                # Deadweight Cargo Capacity (max cargo MT)
     speed_laden_knots: float = 11.0
     speed_ballast_knots: float = 11.5
-    laden_draft_m: float = 8.5
     charter_hire_day: float = 9000.0
-    insurance_annual: float = 16000.0
+    insurance_annual: float = 16000.0  # kept for proration calcs elsewhere
     lsfo_price_mt: float = 560.0
     mgo_price_mt: float = 780.0
     brokerage_pct: float = 0.0375
     ad_com_pct: float = 0.0
     operating_days_year: int = 330
-    other_costs_per_voyage: float = 1000.0
-    demurrage_per_voyage: float = 12190.0
-    # LSFO consumption rates MT/day by operating condition
+    other_costs_per_voyage: float = 5000.0  # miscellaneous per voyage
+    agency_per_port_call: float = 5000.0    # agency fee per port call
+    insurance_per_voyage: float = 4000.0    # fixed insurance per voyage
+    transit_day_buffer: float = 1.0         # +1 day routing/admin buffer per voyage
+    # LSFO — sea passage only (laden and ballast)
+    lsfo_laden: float = 18.0           # MT/day laden sea passage
+    lsfo_ballast: float = 15.0         # MT/day ballast sea passage
+    # MGO — port operations only
+    mgo_port: float = 2.5              # MT/day in port
+    mgo_maneuvering: float = 1.0       # MT/day maneuvering
+    mgo_idle: float = 0.5              # MT/day idle/congestion at anchor
+    # Legacy consumption fields (kept for backward compat, not used in new model)
     lsfo_maneuvering: float = 6.75
-    lsfo_port: float = 5.0
-    lsfo_idle: float = 1.5
-    lsfo_ballast: float = 13.5
-    lsfo_laden: float = 13.5
-    # MGO consumption rates MT/day by operating condition
-    mgo_maneuvering: float = 0.75
-    mgo_port: float = 0.5
-    mgo_idle: float = 1.5
-    mgo_ballast: float = 1.5
-    mgo_laden: float = 1.5
+    lsfo_port: float = 0.0
+    lsfo_idle: float = 0.0
+    mgo_ballast: float = 0.0
+    mgo_laden: float = 0.0
+    laden_draft_m: float = 9.5
+    demurrage_per_voyage: float = 0.0
     # Legacy fields kept for backward compat
-    fuel_laden_mt_day: float = 13.5
-    fuel_ballast_mt_day: float = 13.5
+    fuel_laden_mt_day: float = 18.0
+    fuel_ballast_mt_day: float = 15.0
     bunker_price_mt: float = 560.0
     min_cargo_pct: float = 1.0         # always full DWCC
     # Physical dimensions — used for port access validation
     draft_laden:   float = 9.5         # metres, laden condition
     draft_ballast: float = 5.5         # metres, ballast condition
-    loa:           float = 150.0       # metres, length overall
-    beam:          float = 24.0        # metres, beam
+    loa:           float = 147.0       # metres, length overall
+    beam:          float = 25.0        # metres, beam
 
 
 @dataclass
@@ -147,11 +151,14 @@ class VoyageLeg:
     brokerage: float = 0.0
     net_income: float = 0.0
     # Time components (days)
-    maneuver_days: float = 0.503333
+    maneuver_days: float = 0.5
     loading_days: float = 0.0
     discharge_days: float = 0.0
     port_days: float = 0.0
+    total_port_days: float = 0.0
     idle_days: float = 0.0
+    transit_days: float = 0.0
+    round_voyage_days: float = 0.0
     ballast_days: float = 0.0
     laden_days: float = 0.0
     total_days: float = 0.0
@@ -168,6 +175,7 @@ class VoyageLeg:
     load_port_steve: float = 0.0
     disch_port_nav: float = 0.0
     disch_port_steve: float = 0.0
+    agency_cost: float = 0.0
     insurance: float = 0.0
     other_costs: float = 0.0
     total_expenses: float = 0.0
@@ -247,83 +255,102 @@ def cost_voyage_exact(
     disch_cong_days: float = 0.0,
     load_steve_per_mt: float = 0.0,
     disch_steve_per_mt: float = 0.0,
+    port_stay_days: float = 0.0,
 ) -> dict:
     """
-    Exact voyage cost model matching company spreadsheet.
-    Returns a dict with full P&L breakdown.
+    Exact voyage P&L model matching vessel operator Excel methodology.
+
+    Formula logic (from operator Excel p_l.xlsx):
+      Transit days  = laden_nm / (speed x 24) + ballast_nm / (speed x 24) + 1 day buffer
+      Port days     = flat port stay days (load + discharge) or computed from cargo rates
+      Round voyage  = ROUNDUP(transit + port + congestion, 0) whole days
+      Charter hire  = round_voyage_days x rate
+      Bunker sea    = transit_days x LSFO_price x lsfo_rate  (sea only)
+      Bunker port   = port_days x MGO_price x mgo_port_rate  (port only)
+      Agency        = 2 calls x agency_per_port_call
+      Insurance     = fixed per voyage
+      Misc          = fixed per voyage
     """
+    import math as _math
+
     if lsfo_price is None:
         lsfo_price = vessel.lsfo_price_mt
     if mgo_price is None:
         mgo_price = vessel.mgo_price_mt
 
-    # ── Revenue ──────────────────────────────────────────────────────────────
+    # ── Revenue ───────────────────────────────────────────────────────────────
     gross_freight = freight_rate * cargo_mt
-    brokerage = vessel.brokerage_pct * gross_freight
-    ad_com = vessel.ad_com_pct * gross_freight
-    net_income = gross_freight - brokerage - ad_com
+    brokerage     = vessel.brokerage_pct * gross_freight
+    ad_com        = vessel.ad_com_pct * gross_freight
+    net_income    = gross_freight - brokerage - ad_com
 
-    # ── Time ─────────────────────────────────────────────────────────────────
-    maneuver_days = MANEUVER_DAYS
-    loading_days = cargo_mt / load_rate_mt_day if load_rate_mt_day > 0 else 0.0
-    discharge_days = cargo_mt / disch_rate_mt_day if disch_rate_mt_day > 0 else 0.0
-    port_days = loading_days + discharge_days
-    idle_days = min(0.35 * port_days, 1.5)
+    # ── Transit days (sailing only, + 1-day routing buffer) ──────────────────
+    laden_days   = laden_nm   / (vessel.speed_laden_knots   * 24.0) if laden_nm   > 0 else 0.0
     ballast_days = ballast_nm / (vessel.speed_ballast_knots * 24.0) if ballast_nm > 0 else 0.0
-    laden_days = laden_nm / (vessel.speed_laden_knots * 24.0) if laden_nm > 0 else 0.0
-    total_cong_days = max(0.0, load_cong_days) + max(0.0, disch_cong_days)
-    total_days = maneuver_days + loading_days + idle_days + discharge_days + ballast_days + laden_days + total_cong_days
+    transit_days = laden_days + ballast_days + vessel.transit_day_buffer
 
-    if total_days <= 0:
+    # ── Port stay days ────────────────────────────────────────────────────────
+    if port_stay_days > 0:
+        total_port_days = port_stay_days
+    else:
+        loading_days_c   = cargo_mt / load_rate_mt_day  if load_rate_mt_day  > 0 else 2.0
+        discharge_days_c = cargo_mt / disch_rate_mt_day if disch_rate_mt_day > 0 else 2.0
+        total_port_days  = loading_days_c + discharge_days_c
+
+    # ── Congestion days ───────────────────────────────────────────────────────
+    total_cong_days = max(0.0, load_cong_days) + max(0.0, disch_cong_days)
+
+    # ── Round voyage days — ROUNDUP to whole day (matches Excel B51) ──────────
+    raw_voyage_days   = transit_days + total_port_days + total_cong_days
+    round_voyage_days = _math.ceil(raw_voyage_days)
+
+    if round_voyage_days <= 0:
         return None
 
-    # ── Bunkers ──────────────────────────────────────────────────────────────
-    lsfo_mt = (
-        vessel.lsfo_maneuvering * maneuver_days
-        + vessel.lsfo_port * port_days
-        + vessel.lsfo_idle * idle_days
-        + vessel.lsfo_ballast * ballast_days
-        + vessel.lsfo_laden * laden_days
-        + vessel.lsfo_idle * total_cong_days    # congestion = anchored/idle fuel
-    )
-    mgo_mt = (
-        vessel.mgo_maneuvering * maneuver_days
-        + vessel.mgo_port * port_days
-        + vessel.mgo_idle * idle_days
-        + vessel.mgo_ballast * ballast_days
-        + vessel.mgo_laden * laden_days
-        + vessel.mgo_idle * total_cong_days
-    )
-    lsfo_cost = lsfo_mt * lsfo_price
-    mgo_cost = mgo_mt * mgo_price
-    bunker_cost = lsfo_cost + mgo_cost
+    # ── Charter hire — applied to WHOLE rounded voyage days ──────────────────
+    charter_hire = vessel.charter_hire_day * round_voyage_days
 
-    # ── Other costs ──────────────────────────────────────────────────────────
-    charter_hire = vessel.charter_hire_day * total_days
+    # ── Bunker — sea LSFO only; port MGO only ────────────────────────────────
+    lsfo_sea_mt   = vessel.lsfo_laden   * laden_days
+    lsfo_bal_mt   = vessel.lsfo_ballast * ballast_days
+    lsfo_total_mt = lsfo_sea_mt + lsfo_bal_mt
+    lsfo_cost     = lsfo_total_mt * lsfo_price
+
+    mgo_port_mt  = vessel.mgo_port        * total_port_days
+    mgo_maneuvr  = vessel.mgo_maneuvering * 0.5          # 0.5 day per voyage
+    mgo_cong_mt  = vessel.mgo_idle        * total_cong_days
+    mgo_total_mt = mgo_port_mt + mgo_maneuvr + mgo_cong_mt
+    mgo_cost     = mgo_total_mt * mgo_price
+
+    bunker_cost  = lsfo_cost + mgo_cost
+
+    # ── Port costs ────────────────────────────────────────────────────────────
     stevedoring = (load_steve_per_mt + disch_steve_per_mt) * cargo_mt
-    port_costs = load_port_nav + load_port_steve + disch_port_nav + disch_port_steve + stevedoring
-    insurance = (vessel.insurance_annual / 365.0) * total_days
+    agency_cost = 2.0 * getattr(vessel, 'agency_per_port_call', 5000.0)
+    port_costs  = (load_port_nav + load_port_steve
+                 + disch_port_nav + disch_port_steve
+                 + stevedoring + agency_cost)
+
+    # ── Fixed voyage costs ────────────────────────────────────────────────────
+    insurance  = getattr(vessel, 'insurance_per_voyage', 4000.0)
     other_costs = vessel.other_costs_per_voyage
 
     total_expenses = charter_hire + bunker_cost + port_costs + insurance + other_costs
-    profit_loss = net_income - total_expenses
+    profit_loss    = net_income - total_expenses
 
-    # ── Two-phase breakdown ───────────────────────────────────────────────────
-    # Phase 1 — Ballast: costs only for empty sailing leg to load port
-    _bl_lsfo = (vessel.lsfo_ballast * ballast_days) * lsfo_price
-    _bl_mgo  = (vessel.mgo_ballast  * ballast_days) * mgo_price
-    _bl_hire = vessel.charter_hire_day * ballast_days
-    _bl_total = _bl_hire + _bl_lsfo + _bl_mgo
+    # ── Two-phase breakdown (for Voyage Journey tab display) ──────────────────
+    _bl_lsfo_cost = lsfo_bal_mt * lsfo_price
+    _bl_hire      = vessel.charter_hire_day * ballast_days
+    _bl_total     = _bl_hire + _bl_lsfo_cost
 
-    # Phase 2 — Laden: loaded leg + port time + cong (revenue + costs)
-    _la_days = laden_days + port_days + idle_days + maneuver_days + total_cong_days
+    _la_days = laden_days + total_port_days + total_cong_days + 0.5  # 0.5 maneuver
     _la_hire = vessel.charter_hire_day * _la_days
 
     ballast_phase = {
         'nm':           round(ballast_nm, 1),
         'days':         round(ballast_days, 2),
         'charter_cost': round(_bl_hire, 0),
-        'bunker_cost':  round(_bl_lsfo + _bl_mgo, 0),
+        'bunker_cost':  round(_bl_lsfo_cost, 0),
         'total_cost':   round(_bl_total, 0),
         'revenue':      0.0,
         'net':          round(-_bl_total, 0),
@@ -332,48 +359,61 @@ def cost_voyage_exact(
         'nm':            round(laden_nm, 1),
         'days':          round(_la_days, 2),
         'charter_cost':  round(_la_hire, 0),
-        'bunker_cost':   round(lsfo_cost + mgo_cost - _bl_lsfo - _bl_mgo, 0),
+        'bunker_cost':   round(lsfo_sea_mt * lsfo_price + mgo_cost, 0),
         'port_cost':     round(port_costs, 0),
         'gross_freight': round(gross_freight, 0),
         'net_income':    round(net_income, 0),
         'net':           round(profit_loss, 0),
     }
-    ballast_ratio = ballast_days / max(total_days, 1)
+    ballast_ratio = ballast_days / max(raw_voyage_days, 1)
 
     return {
-        'gross_freight': gross_freight,
-        'brokerage': brokerage,
-        'net_income': net_income,
-        'charter_hire': charter_hire,
-        'lsfo_mt': lsfo_mt,
-        'mgo_mt': mgo_mt,
-        'lsfo_cost': lsfo_cost,
-        'mgo_cost': mgo_cost,
+        # Revenue
+        'gross_freight':  gross_freight,
+        'brokerage':      brokerage,
+        'net_income':     net_income,
+        # Charter
+        'charter_hire':      charter_hire,
+        'round_voyage_days': float(round_voyage_days),
+        # Bunker
+        'lsfo_mt':    lsfo_total_mt,
+        'mgo_mt':     mgo_total_mt,
+        'lsfo_cost':  lsfo_cost,
+        'mgo_cost':   mgo_cost,
         'bunker_cost': bunker_cost,
-        'port_costs': port_costs,
-        'load_port_nav': load_port_nav,
+        # Port
+        'port_costs':     port_costs,
+        'load_port_nav':  load_port_nav,
         'load_port_steve': load_port_steve,
         'disch_port_nav': disch_port_nav,
         'disch_port_steve': disch_port_steve,
-        'stevedoring': stevedoring,
-        'insurance': insurance,
+        'stevedoring':    stevedoring,
+        'agency_cost':    agency_cost,
+        # Fixed
+        'insurance':   insurance,
         'other_costs': other_costs,
         'total_expenses': total_expenses,
-        'profit_loss': profit_loss,
-        'maneuver_days': maneuver_days,
-        'loading_days': loading_days,
-        'discharge_days': discharge_days,
-        'port_days': port_days,
-        'idle_days': idle_days,
-        'ballast_days': ballast_days,
-        'laden_days': laden_days,
-        'load_cong_days': load_cong_days,
+        # P&L
+        'profit_loss':    profit_loss,
+        # Time
+        'transit_days':    transit_days,
+        'laden_days':      laden_days,
+        'ballast_days':    ballast_days,
+        'total_port_days': total_port_days,
+        'port_days':       total_port_days,  # alias
+        'load_cong_days':  load_cong_days,
         'disch_cong_days': disch_cong_days,
         'congestion_days': total_cong_days,
-        'total_days': total_days,
-        'profit_per_day': profit_loss / total_days,
-        'profit_per_mt': profit_loss / cargo_mt if cargo_mt > 0 else 0.0,
-        # Two-phase breakdown
+        'total_days':      raw_voyage_days,
+        # Legacy aliases for backward compat
+        'loading_days':   total_port_days / 2.0,
+        'discharge_days': total_port_days / 2.0,
+        'idle_days':      0.0,
+        'maneuver_days':  0.5,
+        # Derived
+        'profit_per_day': profit_loss / max(raw_voyage_days, 1),
+        'profit_per_mt':  profit_loss / cargo_mt if cargo_mt > 0 else 0.0,
+        # Two-phase
         'ballast_phase':      ballast_phase,
         'laden_phase':        laden_phase,
         'ballast_ratio':      round(ballast_ratio, 3),
@@ -425,36 +465,37 @@ class FastLegLibrary:
         self.commodities  = legs_df['commodity'].values
         self.categories   = legs_df['category'].values
 
-        # Fixed time components (no ballast, no volatility)
-        cargo = vessel.dwcc
-        self.loading_days_arr  = cargo / self.load_rate
-        self.disch_days_arr    = cargo / self.disch_rate
-        self.port_days_arr     = self.loading_days_arr + self.disch_days_arr
-        self.idle_days_arr     = np.minimum(0.35 * self.port_days_arr, 1.5)
-        self.laden_days_arr    = self.laden_nm / (vessel.speed_laden_knots * 24.0)
-        self.port_costs_arr    = self.load_nav + self.load_steve + self.disch_nav + self.disch_steve
+        # Port stay days — flat per commodity (from data_processor DEFAULT_PORT_STAY_DAYS)
+        if 'port_stay_days' in legs_df.columns:
+            self.port_stay_arr = legs_df['port_stay_days'].values.astype(np.float64)
+        else:
+            # Fallback: compute from cargo rates
+            cargo = vessel.dwcc
+            self.port_stay_arr = cargo / self.load_rate + cargo / self.disch_rate
 
-        # Pre-compute fixed portion of bunker (everything except ballast)
-        m = MANEUVER_DAYS
-        self._lsfo_fixed = (
-            vessel.lsfo_maneuvering * m
-            + vessel.lsfo_port * self.port_days_arr
-            + vessel.lsfo_idle * self.idle_days_arr
-            + vessel.lsfo_laden * self.laden_days_arr
-        )
-        self._mgo_fixed = (
-            vessel.mgo_maneuvering * m
-            + vessel.mgo_port * self.port_days_arr
-            + vessel.mgo_idle * self.idle_days_arr
-            + vessel.mgo_laden * self.laden_days_arr
-        )
+        self.laden_days_arr = self.laden_nm / (vessel.speed_laden_knots * 24.0)
+
+        # Port costs (nav + fixed steve) — does NOT include agency (added per voyage)
+        self.port_costs_arr = self.load_nav + self.load_steve + self.disch_nav + self.disch_steve
+
+        # Pre-compute sea LSFO (laden portion only — ballast added per candidate)
+        self._lsfo_laden_fixed = vessel.lsfo_laden * self.laden_days_arr
+
+        # Pre-compute port MGO (port days portion — congestion added per candidate)
+        self._mgo_port_fixed = vessel.mgo_port * self.port_stay_arr
+
+        # _days_fixed = laden + port + transit buffer (no ballast, no congestion)
+        # Used in greedy/MC candidate time-budget filter
         self._days_fixed = (
-            m
-            + self.loading_days_arr
-            + self.idle_days_arr
-            + self.disch_days_arr
-            + self.laden_days_arr
+            self.laden_days_arr
+            + self.port_stay_arr
+            + vessel.transit_day_buffer
         )
+
+        # Legacy arrays kept for any code that still references them
+        self.port_days_arr = self.port_stay_arr
+        self._lsfo_fixed   = self._lsfo_laden_fixed
+        self._mgo_fixed    = self._mgo_port_fixed
 
         # Build per-origin index for fast lookup
         self.by_origin: Dict[int, np.ndarray] = {}
@@ -482,7 +523,7 @@ class FastLegLibrary:
         cargo = v.dwcc
         bd = ballast_nm / (v.speed_ballast_knots * 24.0)
 
-        fr = self.base_freight[indices] * freight_mult
+        fr    = self.base_freight[indices] * freight_mult
         gross = fr * cargo
         net   = gross * (1.0 - v.brokerage_pct - v.ad_com_pct)
 
@@ -491,24 +532,30 @@ class FastLegLibrary:
             (self.load_cong_arr[indices] + self.disch_cong_arr[indices]) * cong_mult, 0.0
         )
 
-        lsfo  = self._lsfo_fixed[indices] + v.lsfo_ballast * bd + v.lsfo_idle * cong_days
-        mgo   = self._mgo_fixed[indices]  + v.mgo_ballast * bd  + v.mgo_idle  * cong_days
-        bunk  = lsfo * lsfo_price + mgo * mgo_price
+        # Sea LSFO only (laden + ballast); no LSFO at port
+        lsfo = self._lsfo_laden_fixed[indices] + v.lsfo_ballast * bd
+        # Port MGO only; no MGO at sea
+        mgo  = self._mgo_port_fixed[indices] + v.mgo_idle * cong_days + v.mgo_maneuvering * 0.5
+        bunk = lsfo * lsfo_price + mgo * mgo_price
 
-        days  = self._days_fixed[indices] + bd + cong_days
-        hire  = v.charter_hire_day * days
-        ins   = (v.insurance_annual / 365.0) * days
+        # Raw voyage days (unrounded) for profit/day denominator
+        raw_days  = self._days_fixed[indices] + bd + cong_days
+        # ROUNDUP to whole day for charter hire — matches Excel B51 x E67
+        hire = v.charter_hire_day * np.ceil(raw_days)
+
+        # Fixed per-voyage overhead: agency (2 calls) + insurance + misc
+        agency    = getattr(v, 'agency_per_port_call', 5000.0) * 2.0
+        insurance = getattr(v, 'insurance_per_voyage', 4000.0)
+        fixed_oh  = agency + insurance + v.other_costs_per_voyage
 
         # Port nav costs with stochastic variation; stevedoring when non-FIO
         pc = (self.load_nav[indices] + self.disch_nav[indices]) * port_charge_mult
-        pc += self.load_steve[indices] + self.disch_steve[indices]  # always include fixed steve
+        pc += self.load_steve[indices] + self.disch_steve[indices]
         if use_stevedoring:
             pc += (self.load_steve_per_mt_arr[indices] + self.disch_steve_per_mt_arr[indices]) * cargo
 
-        other = v.other_costs_per_voyage
-
-        profit = net - (hire + bunk + pc + ins + other)
-        return profit / np.maximum(days, 0.01)
+        profit = net - (hire + bunk + pc + fixed_oh)
+        return profit / np.maximum(raw_days, 0.01)
 
     def build_voyage_leg(
         self,
@@ -553,6 +600,7 @@ class FastLegLibrary:
             disch_cong_days=disch_cong,
             load_steve_per_mt=steve_load,
             disch_steve_per_mt=steve_disch,
+            port_stay_days=float(self.port_stay_arr[idx]),
         )
         if res is None:
             return None
