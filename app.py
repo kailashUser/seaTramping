@@ -135,6 +135,9 @@ def fetch_bunker_prices() -> dict:
         return {"success": False, "error": f"Connection error: {str(e)}"}
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from db.simulation_store import (
+    init_db, save_run, get_run_history, get_iteration_profits, get_top_legs
+)
 from modules.data_processor import (
     load_and_process_data, build_port_database, build_distance_matrix,
     build_leg_library, COMMODITY_23, COMMODITY_CATEGORIES, FREIGHT_RATE_PARAMS,
@@ -716,12 +719,14 @@ with st.sidebar.expander("Port Charge Overrides (CSV)"):
 st.sidebar.markdown("---")
 st.sidebar.markdown("## 🚀 Simulation")
 
-algo_choice = st.sidebar.selectbox(
-    "Algorithm",
-    ["Hybrid (Greedy + Monte Carlo)", "Monte Carlo Only", "Greedy + Local Search"],
-    index=1,
-    key='algo_choice_sidebar',
-    disabled=_sim_locked,
+algo_choice = "Monte Carlo Only"
+st.sidebar.markdown(
+    "<div style='background:#e0f2fe;border:1px solid #0284c7;border-radius:8px;"
+    "padding:8px 12px;font-size:12px;color:#0369a1;margin-bottom:8px'>"
+    "🎲 <b>Algorithm: Monte Carlo</b><br>"
+    "<span style='font-size:10px;color:#0284c7'>Running full stochastic simulation "
+    "across all parameter distributions</span></div>",
+    unsafe_allow_html=True
 )
 n_iterations = st.sidebar.selectbox(
     "Iterations",
@@ -730,92 +735,19 @@ n_iterations = st.sidebar.selectbox(
     key='n_iterations_sidebar',
     disabled=_sim_locked,
 )
-dist_type = st.sidebar.radio(
-    "Distribution type",
-    ["Normal", "Triangular"],
-    index=0,
-    key='dist_type_sidebar',
-    disabled=_sim_locked,
-    help=(
-        "Normal: symmetric, unbounded.\n"
-        "Triangular: bounded by Min/Most Likely/Max — "
-        "matches real observed market data ranges."
-    )
+dist_type = "Normal"
+_use_triangular = False
+freight_vol = st.sidebar.slider(
+    "Freight Rate Volatility (σ)", 0.05, 0.30, 0.15, 0.05,
+    key='freight_vol_sidebar', disabled=_sim_locked,
 )
-_use_triangular = (dist_type == "Triangular")
-
-if not _use_triangular:
-    freight_vol = st.sidebar.slider(
-        "Freight Rate Volatility (σ)", 0.05, 0.30, 0.15, 0.05,
-        key='freight_vol_sidebar', disabled=_sim_locked,
-    )
-    bunker_vol = st.sidebar.slider(
-        "Bunker Price Volatility (σ)", 0.05, 0.25, 0.10, 0.05,
-        key='bunker_vol_sidebar', disabled=_sim_locked,
-    )
-    freight_min=0.70; freight_mode=1.00; freight_max=1.40
-    bunker_min=0.75;  bunker_mode=1.00;  bunker_max=1.60
-    cong_min=0.40;    cong_mode=1.00;    cong_max=2.00
-else:
-    freight_vol = 0.15
-    bunker_vol  = 0.10
-    st.sidebar.markdown(
-        "<div style='font-size:11px;font-weight:600;color:#64748b;"
-        "margin-top:4px;margin-bottom:2px'>Freight rate range</div>",
-        unsafe_allow_html=True
-    )
-    _fc1, _fc2, _fc3 = st.sidebar.columns(3)
-    freight_min  = _fc1.number_input("Min",  value=0.70,
-        min_value=0.30, max_value=0.99, step=0.05,
-        key='fr_min_sb', disabled=_sim_locked, format="%.2f")
-    freight_mode = _fc2.number_input("Mode", value=1.00,
-        min_value=0.50, max_value=1.50, step=0.05,
-        key='fr_mode_sb', disabled=_sim_locked, format="%.2f")
-    freight_max  = _fc3.number_input("Max",  value=1.40,
-        min_value=1.01, max_value=2.50, step=0.05,
-        key='fr_max_sb', disabled=_sim_locked, format="%.2f")
-
-    st.sidebar.markdown(
-        "<div style='font-size:11px;font-weight:600;color:#64748b;"
-        "margin-top:4px;margin-bottom:2px'>Bunker price range</div>",
-        unsafe_allow_html=True
-    )
-    _bc1, _bc2, _bc3 = st.sidebar.columns(3)
-    bunker_min   = _bc1.number_input("Min",  value=0.75,
-        min_value=0.30, max_value=0.99, step=0.05,
-        key='bk_min_sb', disabled=_sim_locked, format="%.2f")
-    bunker_mode  = _bc2.number_input("Mode", value=1.00,
-        min_value=0.50, max_value=1.50, step=0.05,
-        key='bk_mode_sb', disabled=_sim_locked, format="%.2f")
-    bunker_max   = _bc3.number_input("Max",  value=1.60,
-        min_value=1.01, max_value=3.00, step=0.05,
-        key='bk_max_sb', disabled=_sim_locked, format="%.2f")
-
-    st.sidebar.markdown(
-        "<div style='font-size:11px;font-weight:600;color:#64748b;"
-        "margin-top:4px;margin-bottom:2px'>Congestion range</div>",
-        unsafe_allow_html=True
-    )
-    _cc1, _cc2, _cc3 = st.sidebar.columns(3)
-    cong_min     = _cc1.number_input("Min",  value=0.40,
-        min_value=0.10, max_value=0.99, step=0.10,
-        key='cg_min_sb', disabled=_sim_locked, format="%.2f")
-    cong_mode    = _cc2.number_input("Mode", value=1.00,
-        min_value=0.50, max_value=2.00, step=0.10,
-        key='cg_mode_sb', disabled=_sim_locked, format="%.2f")
-    cong_max     = _cc3.number_input("Max",  value=2.00,
-        min_value=1.01, max_value=5.00, step=0.10,
-        key='cg_max_sb', disabled=_sim_locked, format="%.2f")
-
-    st.sidebar.markdown(
-        f"<div style='font-size:10px;color:#64748b;margin-top:4px;"
-        f"background:#f8fafc;padding:5px 8px;border-radius:6px'>"
-        f"Freight: {freight_min:.2f}→<b>{freight_mode:.2f}</b>"
-        f"→{freight_max:.2f} · "
-        f"Bunker: {bunker_min:.2f}→<b>{bunker_mode:.2f}</b>"
-        f"→{bunker_max:.2f}</div>",
-        unsafe_allow_html=True
-    )
+bunker_vol = st.sidebar.slider(
+    "Bunker Price Volatility (σ)", 0.05, 0.25, 0.10, 0.05,
+    key='bunker_vol_sidebar', disabled=_sim_locked,
+)
+freight_min=0.70; freight_mode=1.00; freight_max=1.40
+bunker_min=0.75;  bunker_mode=1.00;  bunker_max=1.60
+cong_min=0.40;    cong_mode=1.00;    cong_max=2.00
 
 st.sidebar.markdown(
     "<div style='font-size:11px;font-weight:600;color:#64748b;"
@@ -867,6 +799,8 @@ _algo_map = {
 
 # ─── DATA PATH ───────────────────────────────────────────────────────────────
 DATA_PATH = os.path.join(os.path.dirname(__file__), 'data', 'D1_Port_Pair_Matrix_Advantis.xlsx')
+DB_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'db', 'compass_runs.db')
+init_db(DB_PATH)
 
 # ── Post-simulation success banner ───────────────────────────────────────────
 if st.session_state.get('sim_done') and 'analysis' in st.session_state:
@@ -884,8 +818,6 @@ if st.session_state.get('sim_done') and 'analysis' in st.session_state:
 tabs = st.tabs([
     "🌏 Network & Data",
     "📈 Summary Results",
-    "⚙️ What-If Editor",
-    "📉 Sensitivity",
     "🗺️ Voyage Analysis",
     "🚢 Voyage Journey",
     "⚓ Port Validation",
@@ -1090,17 +1022,38 @@ with tabs[1]:
         # ── Hero KPI cards ────────────────────────────────────────────────────
         st.markdown("""
 <style>
-.kpi-row { display:flex; gap:12px; margin-bottom:1.5rem; flex-wrap:wrap; }
+.kpi-row  { display:flex; gap:12px; margin-bottom:1.5rem; flex-wrap:wrap; overflow:visible; }
 .kpi-card {
     flex:1; min-width:140px; padding:16px 20px;
     background:linear-gradient(135deg,#1a3a5c 0%,#2d5986 100%);
     border-radius:12px; color:white;
+    position:relative; cursor:default;
 }
 .kpi-val  { font-size:1.7rem; font-weight:700; letter-spacing:-0.5px; }
 .kpi-lbl  { font-size:0.78rem; opacity:0.75; margin-top:4px; }
 .kpi-del  { font-size:0.82rem; margin-top:6px; }
 .kpi-pos  { color:#86efac; }
 .kpi-neg  { color:#fca5a5; }
+.kpi-i    { float:right; font-size:11px; opacity:0.4; font-weight:400;
+            line-height:1; margin-top:2px; letter-spacing:0; }
+.kpi-tip  {
+  display:none; position:absolute; top:calc(100% + 8px); left:0;
+  width:270px; background:rgba(8,18,38,0.98);
+  border:1px solid rgba(59,130,246,0.35); border-radius:10px;
+  padding:12px 14px; font-size:11px; color:#cbd5e1; line-height:1.65;
+  z-index:9999; box-shadow:0 10px 32px rgba(0,0,0,0.65);
+  pointer-events:none; white-space:normal;
+}
+.kpi-card:hover .kpi-tip { display:block; }
+.kpi-tip-ttl  { font-size:11px; font-weight:700; color:#7dd3fc; margin-bottom:7px;
+                padding-bottom:5px; border-bottom:1px solid rgba(255,255,255,0.1); }
+.kpi-tip-row  { display:flex; justify-content:space-between; padding:2.5px 0;
+                font-size:10.5px; border-bottom:0.5px solid rgba(255,255,255,0.05); }
+.kpi-tip-k    { color:#94a3b8; }
+.kpi-tip-v    { color:#f1f5f9; font-weight:600; }
+.kpi-tip-fx   { background:rgba(59,130,246,0.12); border-radius:5px; padding:5px 8px;
+                margin:7px 0 0; font-size:10px; color:#bfdbfe; font-family:monospace; }
+.kpi-tip-note { font-size:9.5px; color:#64748b; margin-top:6px; font-style:italic; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1115,40 +1068,117 @@ with tabs[1]:
                      else '')
         _loss_pct = s.get('loss_pct', 100 - s['profitable_pct'])
 
+        _n_prog       = len(results)
+        _n_profitable = round(s['profitable_pct'] / 100 * _n_prog)
+        _tp0          = analysis['top_programmes'][0]
+        _br_pct       = _tp0.get('ballast_ratio', 0) * 100
+        _bc           = _tp0.get('ballast_cost_total', 0)
+        _p25          = s.get('p25_profit', 0)
+        _p75          = s.get('p75_profit', 0)
+        _med_p        = s.get('median_profit', s['mean_profit'])
+
         st.markdown(f"""
 <div class="kpi-row">
+
   <div class="kpi-card">
+    <span class="kpi-i">ℹ</span>
     <div class="kpi-val">${s['mean_profit']:,.0f}</div>
     <div class="kpi-lbl">Mean Annual Profit</div>
-    <div class="kpi-del kpi-{'pos' if s['mean_profit']>0 else 'neg'}">
-      P90: ${s['p90_profit']:,.0f}
+    <div class="kpi-del kpi-{'pos' if s['mean_profit']>0 else 'neg'}">P90: ${s['p90_profit']:,.0f}</div>
+    <div class="kpi-tip">
+      <div class="kpi-tip-ttl">📐 Mean Annual Profit</div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Simulations run</span><span class="kpi-tip-v">{_n_prog:,}</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Mean profit</span><span class="kpi-tip-v">${s['mean_profit']:,.0f}</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Median profit</span><span class="kpi-tip-v">${_med_p:,.0f}</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Std deviation</span><span class="kpi-tip-v">±${s['std_profit']:,.0f}</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">P10 (bad year)</span><span class="kpi-tip-v">${s['p10_profit']:,.0f}</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">P90 (good year)</span><span class="kpi-tip-v">${s['p90_profit']:,.0f}</span></div>
+      <div class="kpi-tip-fx">Mean = Sum of all programme profits / {_n_prog:,} iterations</div>
+      <div class="kpi-tip-note">P90: 90% of simulations earned below ${s['p90_profit']:,.0f}. Spread shows market uncertainty.</div>
     </div>
   </div>
+
   <div class="kpi-card">
+    <span class="kpi-i">ℹ</span>
     <div class="kpi-val">${s['median_tce']:,.0f}</div>
     <div class="kpi-lbl">Median TCE ($/day)</div>
     <div class="kpi-del">Market avg ~$8,500</div>
+    <div class="kpi-tip">
+      <div class="kpi-tip-ttl">📐 Time Charter Equivalent</div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Median TCE</span><span class="kpi-tip-v">${s['median_tce']:,.0f}/day</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">SEA market avg</span><span class="kpi-tip-v">$8,500/day</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Premium vs market</span><span class="kpi-tip-v">+${s['median_tce']-8500:,.0f}/day</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Runs above $8,500</span><span class="kpi-tip-v">{pct_above_market:.1f}% of {_n_prog:,}</span></div>
+      <div class="kpi-tip-fx">TCE = (Net Revenue − Port − Bunker − Ins − Other) / Operating Days</div>
+      <div class="kpi-tip-note">Middle value of all {_n_prog:,} TCEs. Standard vessel earnings benchmark.</div>
+    </div>
   </div>
+
   <div class="kpi-card">
+    <span class="kpi-i">ℹ</span>
     <div class="kpi-val">{s['profitable_pct']:.1f}%</div>
     <div class="kpi-lbl">Programmes Profitable</div>
     <div class="kpi-del kpi-neg">{_loss_pct:.1f}% loss-making</div>
+    <div class="kpi-tip">
+      <div class="kpi-tip-ttl">📐 Profitability Rate</div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Total simulations</span><span class="kpi-tip-v">{_n_prog:,}</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Profitable runs</span><span class="kpi-tip-v">{_n_profitable:,}</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Loss-making runs</span><span class="kpi-tip-v">{_n_prog - _n_profitable:,}</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Rate</span><span class="kpi-tip-v">{s['profitable_pct']:.1f}%</span></div>
+      <div class="kpi-tip-fx">Rate = Count(profit &gt; $0) / {_n_prog:,} × 100</div>
+      <div class="kpi-tip-note">Each run sampled random freight rates (σ={freight_vol:.0%}), bunker prices (σ={bunker_vol:.0%}), and port congestion.</div>
+    </div>
   </div>
+
   <div class="kpi-card">
+    <span class="kpi-i">ℹ</span>
     <div class="kpi-val">${s['p10_profit']:,.0f}</div>
     <div class="kpi-lbl">Downside P10</div>
     <div class="kpi-del">Worst 10% scenario</div>
+    <div class="kpi-tip">
+      <div class="kpi-tip-ttl">📐 10th Percentile Profit</div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">P10 (this value)</span><span class="kpi-tip-v">${s['p10_profit']:,.0f}</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">P25</span><span class="kpi-tip-v">${_p25:,.0f}</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">P75</span><span class="kpi-tip-v">${_p75:,.0f}</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">P90</span><span class="kpi-tip-v">${s['p90_profit']:,.0f}</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Downside gap vs mean</span><span class="kpi-tip-v">${s['p10_profit'] - s['mean_profit']:,.0f}</span></div>
+      <div class="kpi-tip-fx">P10 = 10th ranked value of {_n_prog:,} sorted programme profits</div>
+      <div class="kpi-tip-note">10% of simulations earned less than this. Use for conservative planning.</div>
+    </div>
   </div>
+
   <div class="kpi-card">
+    <span class="kpi-i">ℹ</span>
     <div class="kpi-val kpi-{_var_col}">${_var_val:,.0f}</div>
     <div class="kpi-lbl">Value at Risk (P5)</div>
     <div class="kpi-del">Worst 5% scenario</div>
+    <div class="kpi-tip">
+      <div class="kpi-tip-ttl">📐 Value at Risk — P5</div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">VaR P5 (this value)</span><span class="kpi-tip-v">${_var_val:,.0f}</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">vs Mean profit</span><span class="kpi-tip-v">${_var_val - s['mean_profit']:,.0f}</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">As % of mean</span><span class="kpi-tip-v">{(_var_val / s['mean_profit'] * 100 if s['mean_profit'] else 0):.1f}%</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Runs below this</span><span class="kpi-tip-v">{round(_n_prog * 0.05):,} of {_n_prog:,}</span></div>
+      <div class="kpi-tip-fx">P5 = 5th ranked value of {_n_prog:,} sorted programme profits</div>
+      <div class="kpi-tip-note">Stress-test floor: only 5% of market scenarios produce less than this.</div>
+    </div>
   </div>
+
   <div class="kpi-card">
-    <div class="kpi-val" style="color:#fbbf24">{analysis['top_programmes'][0].get('ballast_ratio', 0)*100:.0f}%</div>
+    <span class="kpi-i">ℹ</span>
+    <div class="kpi-val" style="color:#fbbf24">{_br_pct:.0f}%</div>
     <div class="kpi-lbl">Ballast Ratio (best prog)</div>
-    <div class="kpi-del" style="color:#fca5a5">-${analysis['top_programmes'][0].get('ballast_cost_total', 0):,.0f} empty cost</div>
+    <div class="kpi-del" style="color:#fca5a5">-${_bc:,.0f} empty cost</div>
+    <div class="kpi-tip" style="left:auto;right:0">
+      <div class="kpi-tip-ttl">📐 Ballast (Empty) Ratio</div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Ballast ratio</span><span class="kpi-tip-v">{_br_pct:.1f}%</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Empty repositioning cost</span><span class="kpi-tip-v">-${_bc:,.0f}</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Industry benchmark</span><span class="kpi-tip-v">&lt;35% is healthy</span></div>
+      <div class="kpi-tip-row"><span class="kpi-tip-k">Status</span><span class="kpi-tip-v">{'✅ Efficient' if _br_pct < 35 else '⚠️ Elevated'}</span></div>
+      <div class="kpi-tip-fx">Ratio = Ballast NM / (Ballast NM + Laden NM) × 100</div>
+      <div class="kpi-tip-note">Empty cost = charter hire paid while repositioning with no cargo on board.</div>
+    </div>
   </div>
+
 </div>
 """, unsafe_allow_html=True)
 
@@ -1241,6 +1271,148 @@ with tabs[1]:
                         unsafe_allow_html=True
                     )
 
+        # ── Run History ───────────────────────────────────────────────────
+        with st.expander("🗄️ Run History — all past simulations", expanded=False):
+            _history = get_run_history(DB_PATH, limit=20)
+            if not _history:
+                st.info("No previous runs found. Complete a simulation to start building history.")
+            else:
+                # ── Summary table ─────────────────────────────────────────
+                import pandas as _pd_h
+                _hist_rows = []
+                for _h in _history:
+                    _ts = _h['run_at'][:16].replace('T', ' ') + ' UTC'
+                    _hist_rows.append({
+                        'Run':          f"#{_h['run_id']}",
+                        'Date (UTC)':   _ts,
+                        'Vessel':       _h.get('vessel_name', '') or f"{_h.get('dwt',0):,.0f} DWT",
+                        'Iterations':   f"{_h['n_iterations']:,}",
+                        'Mean Profit':  f"${_h['mean_profit']:,.0f}",
+                        'Median TCE':   f"${_h['median_tce']:,.0f}/d",
+                        'P10':          f"${_h['p10_profit']:,.0f}",
+                        'P90':          f"${_h['p90_profit']:,.0f}",
+                        'Profitable':   f"{_h['profitable_pct']:.1f}%",
+                        'Time (s)':     f"{_h['elapsed_sec']:.1f}s",
+                    })
+                st.dataframe(
+                    _pd_h.DataFrame(_hist_rows),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                # ── Mean Profit trend across runs ────────────────────────
+                if len(_history) >= 2:
+                    _fig_hist = go.Figure()
+                    _run_ids    = [f"#{h['run_id']}" for h in reversed(_history)]
+                    _mean_profs = [h['mean_profit']   for h in reversed(_history)]
+                    _med_tces   = [h['median_tce']    for h in reversed(_history)]
+
+                    _fig_hist.add_trace(go.Scatter(
+                        x=_run_ids, y=_mean_profs, name='Mean Annual Profit',
+                        mode='lines+markers',
+                        line=dict(color='#22c55e', width=2),
+                        marker=dict(size=7),
+                        yaxis='y1',
+                    ))
+                    _fig_hist.add_trace(go.Scatter(
+                        x=_run_ids, y=_med_tces, name='Median TCE ($/day)',
+                        mode='lines+markers',
+                        line=dict(color='#7dd3fc', width=2, dash='dot'),
+                        marker=dict(size=7),
+                        yaxis='y2',
+                    ))
+                    _fig_hist.update_layout(
+                        title='Mean Profit & Median TCE across simulation runs',
+                        xaxis_title='Run ID',
+                        yaxis=dict(title='Mean Annual Profit ($)', tickformat='$,.0f',
+                                   side='left', showgrid=True),
+                        yaxis2=dict(title='Median TCE ($/day)', tickformat='$,.0f',
+                                    side='right', overlaying='y', showgrid=False),
+                        legend=dict(orientation='h', y=1.1),
+                        height=340,
+                        margin=dict(l=60, r=60, t=60, b=40),
+                    )
+                    st.plotly_chart(_fig_hist, use_container_width=True)
+
+                # ── Drill into a specific run's full iteration distribution ─
+                st.markdown("---")
+                _run_options = {f"#{h['run_id']} — {h['run_at'][:16].replace('T',' ')} UTC "
+                                f"({h['n_iterations']:,} iters, mean ${h['mean_profit']:,.0f})": h['run_id']
+                                for h in _history}
+                _sel_label = st.selectbox("Drill into run", list(_run_options.keys()),
+                                          key='hist_drill_sel')
+                _sel_run_id = _run_options[_sel_label]
+                _iter_data  = get_iteration_profits(DB_PATH, _sel_run_id)
+
+                if _iter_data:
+                    _iter_profits = [d['total_profit'] for d in _iter_data]
+                    _iter_tces    = [d['avg_tce']      for d in _iter_data]
+
+                    _dc1, _dc2 = st.columns(2)
+                    with _dc1:
+                        _fig_drill = go.Figure()
+                        _fig_drill.add_trace(go.Histogram(
+                            x=_iter_profits, nbinsx=60,
+                            marker_color='#22c55e', opacity=0.75,
+                            name='Profit distribution',
+                        ))
+                        _fig_drill.add_vline(
+                            x=sum(_iter_profits)/len(_iter_profits),
+                            line_dash='dash', line_color='#f59e0b',
+                            annotation_text='Mean', annotation_position='top right',
+                        )
+                        _fig_drill.update_layout(
+                            title=f'All {len(_iter_data):,} iterations — Profit distribution',
+                            xaxis_title='Annual Profit ($)', yaxis_title='Count',
+                            xaxis_tickformat='$,.0f', height=300,
+                            margin=dict(l=40, r=20, t=40, b=40),
+                        )
+                        st.plotly_chart(_fig_drill, use_container_width=True)
+                    with _dc2:
+                        _fig_tce2 = go.Figure()
+                        _fig_tce2.add_trace(go.Histogram(
+                            x=_iter_tces, nbinsx=60,
+                            marker_color='#7dd3fc', opacity=0.75,
+                            name='TCE distribution',
+                        ))
+                        _fig_tce2.add_vline(
+                            x=8500, line_dash='dash', line_color='#f59e0b',
+                            annotation_text='$8,500 benchmark',
+                            annotation_position='top right',
+                        )
+                        _fig_tce2.update_layout(
+                            title=f'All {len(_iter_data):,} iterations — TCE distribution',
+                            xaxis_title='TCE ($/day)', yaxis_title='Count',
+                            xaxis_tickformat='$,.0f', height=300,
+                            margin=dict(l=40, r=20, t=40, b=40),
+                        )
+                        st.plotly_chart(_fig_tce2, use_container_width=True)
+
+                    # Cumulative best profit across the iteration sequence
+                    _cum_best, _best_so_far = [], float('-inf')
+                    for _p in _iter_profits:
+                        if _p > _best_so_far:
+                            _best_so_far = _p
+                        _cum_best.append(_best_so_far)
+
+                    _fig_conv = go.Figure()
+                    _fig_conv.add_trace(go.Scatter(
+                        x=list(range(1, len(_cum_best)+1)), y=_cum_best,
+                        mode='lines', fill='tozeroy',
+                        line=dict(color='#22c55e', width=2),
+                        fillcolor='rgba(34,197,94,0.1)',
+                        name='Best profit found so far',
+                    ))
+                    _fig_conv.update_layout(
+                        title='Convergence — best profit discovered iteration by iteration',
+                        xaxis_title='Iteration #', yaxis_title='Best profit found ($)',
+                        yaxis_tickformat='$,.0f', height=260,
+                        margin=dict(l=60, r=20, t=40, b=40),
+                    )
+                    st.plotly_chart(_fig_conv, use_container_width=True)
+                else:
+                    st.info("No iteration detail found for this run.")
+
         st.markdown("### Profit Distribution")
         profits = [r['total_profit'] for r in results]
         tces    = [r['avg_tce'] for r in results]
@@ -1308,6 +1480,63 @@ with tabs[1]:
             f"**Median TCE: ${mean_tce:,.0f}/day** — {tce_verdict}  |  "
             f"SEA ~20k DWT handy bulk market reference: $8,500–$12,000/day"
         )
+
+        # ── Why these ports and commodities? ─────────────────────────────────────
+        top1 = analysis['top_programmes'][0] if analysis['top_programmes'] else None
+        if top1:
+            top_ports = sorted(
+                analysis['port_ranking'][:5], key=lambda x: x['frequency_pct'], reverse=True
+            )
+            top_comms = sorted(
+                analysis['commodity_ranking'][:5], key=lambda x: x['avg_profit_per_leg'], reverse=True
+            )
+
+            port_bullets = "".join([
+                f"<li><b>{p['port']}</b> — appeared in {p['frequency_pct']:.1f}% of top programmes "
+                f"(avg profit contribution: ${p.get('avg_profit', 0):,.0f})</li>"
+                for p in top_ports
+            ])
+            comm_bullets = "".join([
+                f"<li><b>{c['commodity']}</b> — avg ${c['avg_profit_per_leg']:,.0f}/leg, "
+                f"{c['frequency']} voyages, total revenue ${c['total_revenue']:,.0f}</li>"
+                for c in top_comms
+            ])
+
+            _br = top1.get('ballast_ratio', 0) * 100
+            _br_explain = (
+                "This is healthy — under 35% is the industry benchmark for efficient tramping."
+                if _br < 35 else
+                "This is elevated — consider tighter port pairing to reduce empty sailing."
+            )
+
+            st.markdown(
+                f"""
+<div style='background:#f0f9ff;border:1px solid #0284c7;border-radius:12px;
+     padding:18px 20px;margin:12px 0;font-size:13px;color:#0c1a2e;line-height:1.8'>
+
+<b style='font-size:14px;color:#1a3a5c'>🔍 Why did the simulation select these ports and commodities?</b><br><br>
+
+The Monte Carlo engine ran <b>{n_iterations:,} independent iterations</b>, each randomly
+sampling freight rates (σ={freight_vol:.0%}), bunker prices (σ={bunker_vol:.0%}), and port
+congestion across the full cargo network. The top programme was selected because it produced
+the highest <b>risk-adjusted annual profit (${top1['total_profit']:,.0f})</b> and
+TCE <b>(${top1['avg_tce']:,.0f}/day)</b> across the widest range of market scenarios.
+
+<br><b>🏆 Top ports by appearance in profitable programmes:</b>
+<ul style='margin:6px 0 6px 16px'>{port_bullets}</ul>
+These ports were preferred because they consistently offered high-paying cargo opportunities,
+low port dues relative to revenue, and short ballast repositioning from prior discharge ports.
+
+<br><b>📦 Top commodities by profitability:</b>
+<ul style='margin:6px 0 6px 16px'>{comm_bullets}</ul>
+These commodities delivered the best freight rate × cargo size combinations while keeping
+port handling costs within the vessel's cost model.
+
+<br><b>⚓ Ballast ratio: {_br:.1f}%</b> — {_br_explain}
+
+</div>""",
+                unsafe_allow_html=True
+            )
 
         col1, col2 = st.columns(2)
         with col1:
@@ -1592,407 +1821,315 @@ with tabs[1]:
     else:
         st.info("Run the simulation first.")
 
-# ─── TAB 6: WHAT-IF / VOYAGE EDITOR ─────────────────────────────────────────
-with tabs[2]:
-    if 'analysis' in st.session_state:
-        analysis  = st.session_state['analysis']
-        vessel    = st.session_state.get('vessel')
-        dm        = st.session_state.get('dist_matrix')
-        legs_df   = st.session_state.get('legs_df')
-        top_progs = analysis['top_programmes']
+# HIDDEN: What-If Editor tab — temporarily disabled
+# with tabs[2]:
+#     if 'analysis' in st.session_state:
+#         analysis  = st.session_state['analysis']
+#         vessel    = st.session_state.get('vessel')
+#         dm        = st.session_state.get('dist_matrix')
+#         legs_df   = st.session_state.get('legs_df')
+#         top_progs = analysis['top_programmes']
+#         if vessel is None or dm is None or legs_df is None:
+#             st.warning("Re-run the simulation to enable the What-If editor.")
+#         else:
+#             st.markdown("### What-If / Voyage Editor")
+#             st.info(
+#                 "Modify any voyage in a programme and all downstream voyages automatically "
+#                 "cascade-recalculate (ballast distances, costs, cumulative profit)."
+#             )
+#             prog_sel = st.selectbox("Load programme", range(1, len(top_progs) + 1),
+#                                     key='whatif_prog')
+#             prog = top_progs[prog_sel - 1]
+#             if 'fast_lib' not in st.session_state:
+#                 from modules.simulation_engine import _ensure_port_cost_columns
+#                 legs_df_v2 = _ensure_port_cost_columns(legs_df)
+#                 st.session_state['fast_lib'] = FastLegLibrary(legs_df_v2, vessel)
+#             fast_lib = st.session_state['fast_lib']
+#             from modules.simulation_engine import VoyageLeg, cascade_recalculate_legs
+#             def dict_to_leg(d):
+#                 leg = VoyageLeg(
+#                     origin_id=int(d.get('origin_id', 0)),
+#                     dest_id=int(d.get('dest_id', 0)),
+#                     origin_port=d['origin_port'],
+#                     dest_port=d['dest_port'],
+#                     ballast_from_port=d.get('ballast_from_port', ''),
+#                     commodity=d['commodity'],
+#                     category=d.get('category', ''),
+#                     cargo_mt=d.get('cargo_mt', vessel.dwcc),
+#                     freight_rate=d.get('freight_rate', 0),
+#                     ballast_nm=d.get('ballast_nm', d.get('ballast_distance_nm', 0)),
+#                     laden_nm=d.get('laden_nm', d.get('distance_nm', 0)),
+#                     gross_freight=d.get('gross_freight', d.get('revenue', 0)),
+#                     brokerage=d.get('brokerage', 0),
+#                     net_income=d.get('net_income', 0),
+#                     maneuver_days=d.get('maneuver_days', 0.503333),
+#                     loading_days=d.get('loading_days', d.get('load_days', 0)),
+#                     discharge_days=d.get('discharge_days', d.get('disch_days', 0)),
+#                     port_days=d.get('port_days', 0),
+#                     idle_days=d.get('idle_days', 0),
+#                     ballast_days=d.get('ballast_days', 0),
+#                     laden_days=d.get('laden_days', 0),
+#                     total_days=d.get('total_days', 0),
+#                     lsfo_mt=d.get('lsfo_mt', 0),
+#                     mgo_mt=d.get('mgo_mt', 0),
+#                     lsfo_cost=d.get('lsfo_cost', 0),
+#                     mgo_cost=d.get('mgo_cost', 0),
+#                     bunker_cost=d.get('bunker_cost', 0),
+#                     charter_hire=d.get('charter_hire', d.get('charter_hire_cost', 0)),
+#                     port_costs=d.get('port_costs', 0),
+#                     load_port_nav=d.get('load_port_nav', 0),
+#                     load_port_steve=d.get('load_port_steve', 0),
+#                     disch_port_nav=d.get('disch_port_nav', 0),
+#                     disch_port_steve=d.get('disch_port_steve', 0),
+#                     insurance=d.get('insurance', 0),
+#                     other_costs=d.get('other_costs', 1000),
+#                     total_expenses=d.get('total_expenses', d.get('total_cost', 0)),
+#                     profit_loss=d.get('profit_loss', d.get('profit', 0)),
+#                     profit_per_day=d.get('profit_per_day', 0),
+#                     profit_per_mt=d.get('profit_per_mt', 0),
+#                     cum_days=d.get('cum_days', 0),
+#                     cum_profit=d.get('cum_profit', 0),
+#                 )
+#                 return leg
+#             prog_key = f'whatif_legs_{prog_sel}'
+#             if prog_key not in st.session_state:
+#                 st.session_state[prog_key] = [dict_to_leg(d) for d in prog['legs']]
+#             working_legs = st.session_state[prog_key]
+#             st.markdown("#### Select a voyage to modify")
+#             voy_labels = [
+#                 f"V{i+1}: {l.origin_port} → {l.dest_port} | {l.commodity} | ${l.profit_loss:,.0f}"
+#                 for i, l in enumerate(working_legs)
+#             ]
+#             edit_idx = st.selectbox("Voyage to edit", range(len(working_legs)),
+#                                     format_func=lambda i: voy_labels[i], key='whatif_voy')
+#             sel_leg = working_legs[edit_idx]
+#             load_ports = sorted(legs_df['origin_port'].unique().tolist())
+#             disch_ports = sorted(legs_df['dest_port'].unique().tolist())
+#             commodities = sorted(legs_df['commodity'].unique().tolist())
+#             col1, col2, col3, col4 = st.columns(4)
+#             with col1:
+#                 new_load = st.selectbox("New Load Port", load_ports,
+#                     index=load_ports.index(sel_leg.origin_port) if sel_leg.origin_port in load_ports else 0,
+#                     key='wi_load')
+#             with col2:
+#                 new_disch = st.selectbox("New Discharge Port", disch_ports,
+#                     index=disch_ports.index(sel_leg.dest_port) if sel_leg.dest_port in disch_ports else 0,
+#                     key='wi_disch')
+#             with col3:
+#                 new_comm = st.selectbox("Commodity", commodities,
+#                     index=commodities.index(sel_leg.commodity) if sel_leg.commodity in commodities else 0,
+#                     key='wi_comm')
+#             with col4:
+#                 new_rate = st.number_input("Freight Rate ($/MT)",
+#                     value=float(round(sel_leg.freight_rate, 2)),
+#                     min_value=1.0, max_value=200.0, step=0.5, key='wi_rate')
+#             if st.button("Apply Change & Cascade Recalculate", type="primary"):
+#                 load_row = legs_df[
+#                     (legs_df['origin_port'] == new_load) &
+#                     (legs_df['dest_port']   == new_disch) &
+#                     (legs_df['commodity']   == new_comm)
+#                 ]
+#                 if load_row.empty:
+#                     st.error(f"No feasible leg found for {new_load} → {new_disch} carrying {new_comm}.")
+#                 else:
+#                     row = load_row.iloc[0]
+#                     new_leg_idx = int(row.name) if int(row.name) < len(fast_lib.origin_ids) else _find_leg_idx(
+#                         fast_lib, int(row['origin_id']), int(row['dest_id']), new_comm)
+#                     if edit_idx == 0:
+#                         ballast_nm = 0.0
+#                         bfrom = new_load
+#                     else:
+#                         prev_dest_id = working_legs[edit_idx - 1].dest_id
+#                         ballast_nm = float(dm[prev_dest_id, int(row['origin_id'])])
+#                         bfrom = working_legs[edit_idx - 1].dest_port
+#                     new_leg = fast_lib.build_voyage_leg(
+#                         _find_leg_idx(fast_lib, int(row['origin_id']), int(row['dest_id']), new_comm),
+#                         ballast_nm, bfrom, vessel.lsfo_price_mt, vessel.mgo_price_mt, new_rate)
+#                     if new_leg is None:
+#                         st.error("Failed to compute costs for this leg.")
+#                     else:
+#                         working_legs[edit_idx] = new_leg
+#                         working_legs = cascade_recalculate_legs(
+#                             working_legs, edit_idx + 1, dm, vessel, fast_lib,
+#                             vessel.lsfo_price_mt, vessel.mgo_price_mt)
+#                         st.session_state[prog_key] = working_legs
+#                         st.success(f"Voyage {edit_idx+1} updated — all downstream voyages recalculated.")
+#                         st.rerun()
+#             if st.button("Reset to Original Programme"):
+#                 if prog_key in st.session_state:
+#                     del st.session_state[prog_key]
+#                 st.rerun()
+#             st.markdown("#### Current Programme — Voyage Schedule")
+#             wi_rows = []
+#             for i, leg in enumerate(working_legs):
+#                 orig_leg = prog['legs'][i] if i < len(prog['legs']) else {}
+#                 orig_profit = orig_leg.get('profit_loss', orig_leg.get('profit', 0))
+#                 curr_profit = leg.profit_loss
+#                 delta = curr_profit - orig_profit
+#                 wi_rows.append({
+#                     'Voy #': i + 1, 'Load Port': leg.origin_port,
+#                     'Disch Port': leg.dest_port, 'Commodity': leg.commodity,
+#                     'Rate $/MT': f"${leg.freight_rate:.2f}",
+#                     'Ballast NM': f"{leg.ballast_nm:,.0f}",
+#                     'Laden NM': f"{leg.laden_nm:,.0f}",
+#                     'Total Days': f"{leg.total_days:.2f}",
+#                     'Profit': f"${curr_profit:,.0f}",
+#                     'vs Original': f"{'+'if delta>=0 else ''}{delta:,.0f}",
+#                     'Cum Profit': f"${leg.cum_profit:,.0f}",
+#                 })
+#             st.dataframe(pd.DataFrame(wi_rows), use_container_width=True)
+#             orig_total = sum(l.get('profit_loss', l.get('profit', 0)) for l in prog['legs'])
+#             new_total  = sum(l.profit_loss for l in working_legs)
+#             delta_total = new_total - orig_total
+#             col1, col2, col3 = st.columns(3)
+#             col1.metric("Original Annual Profit", f"${orig_total:,.0f}")
+#             col2.metric("Modified Annual Profit",  f"${new_total:,.0f}")
+#             col3.metric("Change", f"${delta_total:+,.0f}",
+#                         delta_color="normal" if delta_total >= 0 else "inverse")
+#             orig_cum, new_cum = [], []
+#             o_run, n_run = 0.0, 0.0
+#             n_show = max(len(prog['legs']), len(working_legs))
+#             for i in range(n_show):
+#                 if i < len(prog['legs']):
+#                     o_run += prog['legs'][i].get('profit_loss', prog['legs'][i].get('profit', 0))
+#                 if i < len(working_legs):
+#                     n_run += working_legs[i].profit_loss
+#                 orig_cum.append(o_run)
+#                 new_cum.append(n_run)
+#             fig = go.Figure()
+#             fig.add_trace(go.Scatter(x=list(range(1, n_show + 1)), y=orig_cum,
+#                 name='Original', line=dict(color='#667eea', width=2, dash='dash')))
+#             fig.add_trace(go.Scatter(x=list(range(1, n_show + 1)), y=new_cum,
+#                 name='Modified', line=dict(color='#22c55e', width=3)))
+#             fig.add_hline(y=0, line_dash='dash', line_color='red')
+#             fig.update_layout(xaxis_title="Voyage Number",
+#                 yaxis_title="Cumulative Profit (USD)",
+#                 title="Cumulative Profit: Original vs Modified", height=420)
+#             st.plotly_chart(fig, use_container_width=True)
+#     else:
+#         st.info("Run the simulation first to use the What-If editor.")
 
-        if vessel is None or dm is None or legs_df is None:
-            st.warning("Re-run the simulation to enable the What-If editor.")
-        else:
-            st.markdown("### What-If / Voyage Editor")
-            st.info(
-                "Modify any voyage in a programme and all downstream voyages automatically "
-                "cascade-recalculate (ballast distances, costs, cumulative profit)."
-            )
-
-            prog_sel = st.selectbox("Load programme", range(1, len(top_progs) + 1),
-                                    key='whatif_prog')
-            prog = top_progs[prog_sel - 1]
-
-            # Build fast library once
-            if 'fast_lib' not in st.session_state:
-                from modules.simulation_engine import _ensure_port_cost_columns
-                legs_df_v2 = _ensure_port_cost_columns(legs_df)
-                st.session_state['fast_lib'] = FastLegLibrary(legs_df_v2, vessel)
-
-            fast_lib = st.session_state['fast_lib']
-
-            # Reconstruct VoyageLeg objects from dicts
-            from modules.simulation_engine import VoyageLeg, cascade_recalculate_legs
-
-            def dict_to_leg(d):
-                leg = VoyageLeg(
-                    origin_id=int(d.get('origin_id', 0)),
-                    dest_id=int(d.get('dest_id', 0)),
-                    origin_port=d['origin_port'],
-                    dest_port=d['dest_port'],
-                    ballast_from_port=d.get('ballast_from_port', ''),
-                    commodity=d['commodity'],
-                    category=d.get('category', ''),
-                    cargo_mt=d.get('cargo_mt', vessel.dwcc),
-                    freight_rate=d.get('freight_rate', 0),
-                    ballast_nm=d.get('ballast_nm', d.get('ballast_distance_nm', 0)),
-                    laden_nm=d.get('laden_nm', d.get('distance_nm', 0)),
-                    gross_freight=d.get('gross_freight', d.get('revenue', 0)),
-                    brokerage=d.get('brokerage', 0),
-                    net_income=d.get('net_income', 0),
-                    maneuver_days=d.get('maneuver_days', 0.503333),
-                    loading_days=d.get('loading_days', d.get('load_days', 0)),
-                    discharge_days=d.get('discharge_days', d.get('disch_days', 0)),
-                    port_days=d.get('port_days', 0),
-                    idle_days=d.get('idle_days', 0),
-                    ballast_days=d.get('ballast_days', 0),
-                    laden_days=d.get('laden_days', 0),
-                    total_days=d.get('total_days', 0),
-                    lsfo_mt=d.get('lsfo_mt', 0),
-                    mgo_mt=d.get('mgo_mt', 0),
-                    lsfo_cost=d.get('lsfo_cost', 0),
-                    mgo_cost=d.get('mgo_cost', 0),
-                    bunker_cost=d.get('bunker_cost', 0),
-                    charter_hire=d.get('charter_hire', d.get('charter_hire_cost', 0)),
-                    port_costs=d.get('port_costs', 0),
-                    load_port_nav=d.get('load_port_nav', 0),
-                    load_port_steve=d.get('load_port_steve', 0),
-                    disch_port_nav=d.get('disch_port_nav', 0),
-                    disch_port_steve=d.get('disch_port_steve', 0),
-                    insurance=d.get('insurance', 0),
-                    other_costs=d.get('other_costs', 1000),
-                    total_expenses=d.get('total_expenses', d.get('total_cost', 0)),
-                    profit_loss=d.get('profit_loss', d.get('profit', 0)),
-                    profit_per_day=d.get('profit_per_day', 0),
-                    profit_per_mt=d.get('profit_per_mt', 0),
-                    cum_days=d.get('cum_days', 0),
-                    cum_profit=d.get('cum_profit', 0),
-                )
-                return leg
-
-            # Initialise session state for the working copy of legs
-            prog_key = f'whatif_legs_{prog_sel}'
-            if prog_key not in st.session_state:
-                st.session_state[prog_key] = [dict_to_leg(d) for d in prog['legs']]
-
-            working_legs = st.session_state[prog_key]
-
-            # ── Voyage selector and editor ────────────────────────────────────
-            st.markdown("#### Select a voyage to modify")
-            voy_labels = [
-                f"V{i+1}: {l.origin_port} → {l.dest_port} | {l.commodity} | ${l.profit_loss:,.0f}"
-                for i, l in enumerate(working_legs)
-            ]
-            edit_idx = st.selectbox("Voyage to edit", range(len(working_legs)),
-                                    format_func=lambda i: voy_labels[i], key='whatif_voy')
-
-            sel_leg = working_legs[edit_idx]
-
-            # Collect available load ports and discharge ports from leg library
-            load_ports = sorted(legs_df['origin_port'].unique().tolist())
-            disch_ports = sorted(legs_df['dest_port'].unique().tolist())
-            commodities = sorted(legs_df['commodity'].unique().tolist())
-
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                new_load = st.selectbox("New Load Port",
-                                        load_ports,
-                                        index=load_ports.index(sel_leg.origin_port) if sel_leg.origin_port in load_ports else 0,
-                                        key='wi_load')
-            with col2:
-                new_disch = st.selectbox("New Discharge Port",
-                                         disch_ports,
-                                         index=disch_ports.index(sel_leg.dest_port) if sel_leg.dest_port in disch_ports else 0,
-                                         key='wi_disch')
-            with col3:
-                new_comm = st.selectbox("Commodity",
-                                        commodities,
-                                        index=commodities.index(sel_leg.commodity) if sel_leg.commodity in commodities else 0,
-                                        key='wi_comm')
-            with col4:
-                new_rate = st.number_input("Freight Rate ($/MT)",
-                                           value=float(round(sel_leg.freight_rate, 2)),
-                                           min_value=1.0, max_value=200.0, step=0.5,
-                                           key='wi_rate')
-
-            if st.button("Apply Change & Cascade Recalculate", type="primary"):
-                # Find matching leg in library
-                load_row = legs_df[
-                    (legs_df['origin_port'] == new_load) &
-                    (legs_df['dest_port']   == new_disch) &
-                    (legs_df['commodity']   == new_comm)
-                ]
-                if load_row.empty:
-                    st.error(f"No feasible leg found for {new_load} → {new_disch} carrying {new_comm}.")
-                else:
-                    row = load_row.iloc[0]
-                    new_leg_idx = int(row.name) if int(row.name) < len(fast_lib.origin_ids) else _find_leg_idx(
-                        fast_lib, int(row['origin_id']), int(row['dest_id']), new_comm
-                    )
-                    # Determine ballast NM from previous voyage
-                    if edit_idx == 0:
-                        ballast_nm = 0.0
-                        bfrom = new_load
-                    else:
-                        prev_dest_id = working_legs[edit_idx - 1].dest_id
-                        ballast_nm = float(dm[prev_dest_id, int(row['origin_id'])])
-                        bfrom = working_legs[edit_idx - 1].dest_port
-
-                    new_leg = fast_lib.build_voyage_leg(
-                        _find_leg_idx(fast_lib, int(row['origin_id']), int(row['dest_id']), new_comm),
-                        ballast_nm, bfrom,
-                        vessel.lsfo_price_mt, vessel.mgo_price_mt,
-                        new_rate,
-                    )
-                    if new_leg is None:
-                        st.error("Failed to compute costs for this leg.")
-                    else:
-                        working_legs[edit_idx] = new_leg
-                        # Cascade from the next voyage
-                        working_legs = cascade_recalculate_legs(
-                            working_legs, edit_idx + 1, dm, vessel, fast_lib,
-                            vessel.lsfo_price_mt, vessel.mgo_price_mt,
-                        )
-                        st.session_state[prog_key] = working_legs
-                        st.success(f"Voyage {edit_idx+1} updated — all downstream voyages recalculated.")
-                        st.rerun()
-
-            if st.button("Reset to Original Programme"):
-                if prog_key in st.session_state:
-                    del st.session_state[prog_key]
-                st.rerun()
-
-            # ── Before/After comparison ───────────────────────────────────────
-            st.markdown("#### Current Programme — Voyage Schedule")
-            wi_rows = []
-            for i, leg in enumerate(working_legs):
-                orig_leg = prog['legs'][i] if i < len(prog['legs']) else {}
-                orig_profit = orig_leg.get('profit_loss', orig_leg.get('profit', 0))
-                curr_profit = leg.profit_loss
-                delta = curr_profit - orig_profit
-                wi_rows.append({
-                    'Voy #':       i + 1,
-                    'Load Port':   leg.origin_port,
-                    'Disch Port':  leg.dest_port,
-                    'Commodity':   leg.commodity,
-                    'Rate $/MT':   f"${leg.freight_rate:.2f}",
-                    'Ballast NM':  f"{leg.ballast_nm:,.0f}",
-                    'Laden NM':    f"{leg.laden_nm:,.0f}",
-                    'Total Days':  f"{leg.total_days:.2f}",
-                    'Profit':      f"${curr_profit:,.0f}",
-                    'vs Original': f"{'+'if delta>=0 else ''}{delta:,.0f}",
-                    'Cum Profit':  f"${leg.cum_profit:,.0f}",
-                })
-            st.dataframe(pd.DataFrame(wi_rows), use_container_width=True)
-
-            # Totals comparison
-            orig_total = sum(l.get('profit_loss', l.get('profit', 0)) for l in prog['legs'])
-            new_total  = sum(l.profit_loss for l in working_legs)
-            delta_total = new_total - orig_total
-
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Original Annual Profit", f"${orig_total:,.0f}")
-            col2.metric("Modified Annual Profit",  f"${new_total:,.0f}")
-            col3.metric("Change",                  f"${delta_total:+,.0f}",
-                        delta_color="normal" if delta_total >= 0 else "inverse")
-
-            # Cumulative profit before/after chart
-            orig_cum, new_cum = [], []
-            o_run, n_run = 0.0, 0.0
-            n_show = max(len(prog['legs']), len(working_legs))
-            for i in range(n_show):
-                if i < len(prog['legs']):
-                    o_run += prog['legs'][i].get('profit_loss', prog['legs'][i].get('profit', 0))
-                if i < len(working_legs):
-                    n_run += working_legs[i].profit_loss
-                orig_cum.append(o_run)
-                new_cum.append(n_run)
-
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=list(range(1, n_show + 1)), y=orig_cum,
-                                     name='Original', line=dict(color='#667eea', width=2, dash='dash')))
-            fig.add_trace(go.Scatter(x=list(range(1, n_show + 1)), y=new_cum,
-                                     name='Modified', line=dict(color='#22c55e', width=3)))
-            fig.add_hline(y=0, line_dash='dash', line_color='red')
-            fig.update_layout(
-                xaxis_title="Voyage Number",
-                yaxis_title="Cumulative Profit (USD)",
-                title="Cumulative Profit: Original vs Modified",
-                height=420,
-            )
-            st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Run the simulation first to use the What-If editor.")
-
-# ─── TAB 7: SENSITIVITY ANALYSIS ─────────────────────────────────────────────
-with tabs[3]:
-    if 'analysis' not in st.session_state:
-        st.info("Run the simulation first.")
-    else:
-        st.markdown("### Sensitivity Analysis")
-        st.markdown(
-            "Adjust the sliders to see how changes in market conditions "
-            "affect the top programme's profitability — instantly."
-        )
-
-        analysis = st.session_state['analysis']
-        vessel   = st.session_state.get('vessel')
-        top_prog = analysis['top_programmes'][0] if analysis['top_programmes'] else None
-
-        if top_prog is None or vessel is None:
-            st.warning("No results available.")
-        else:
-            legs_base   = top_prog['legs']
-            base_profit = top_prog['total_profit']
-            base_tce    = top_prog['avg_tce']
-
-            st.markdown("#### Market Scenario Sliders")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                bunker_delta = st.slider(
-                    "Bunker Price Change (%)",
-                    min_value=-40, max_value=60, value=0, step=5,
-                    help="±% change applied to both LSFO and MGO prices"
-                )
-            with col2:
-                freight_delta = st.slider(
-                    "Freight Rate Change (%)",
-                    min_value=-40, max_value=40, value=0, step=5,
-                    help="±% change applied to all freight rates"
-                )
-            with col3:
-                hire_delta = st.slider(
-                    "Charter Hire Change (%)",
-                    min_value=-30, max_value=50, value=0, step=5,
-                    help="±% change in daily charter hire rate"
-                )
-
-            def recalculate_sensitivity(legs, bunker_pct, freight_pct, hire_pct):
-                """Recompute programme P&L with adjusted market parameters."""
-                b_mult = 1 + bunker_pct / 100
-                f_mult = 1 + freight_pct / 100
-                h_mult = 1 + hire_pct / 100
-                new_profit  = 0.0
-                new_revenue = 0.0
-                new_bunker  = 0.0
-                new_hire    = 0.0
-                for leg in legs:
-                    gross = leg.get('gross_freight', leg.get('revenue', 0)) * f_mult
-                    brok  = gross * (brokerage_pct_ui / 100.0)
-                    ni    = gross - brok
-                    bunk  = leg.get('bunker_cost', 0) * b_mult
-                    hire  = leg.get('charter_hire', leg.get('charter_hire_cost', 0)) * h_mult
-                    port  = leg.get('port_costs', 0)
-                    ins   = leg.get('insurance', 0)
-                    oth   = leg.get('other_costs', 1000)
-                    exp   = hire + bunk + port + ins + oth
-                    pl    = ni - exp
-                    new_profit  += pl
-                    new_revenue += gross
-                    new_bunker  += bunk
-                    new_hire    += hire
-                return {
-                    'profit': new_profit,
-                    'revenue': new_revenue,
-                    'bunker': new_bunker,
-                    'hire': new_hire,
-                }
-
-            result       = recalculate_sensitivity(legs_base, bunker_delta, freight_delta, hire_delta)
-            new_profit   = result['profit']
-            profit_delta = new_profit - base_profit
-            profit_delta_pct = (profit_delta / abs(base_profit)) * 100 if base_profit != 0 else 0
-            total_days   = sum(l.get('total_days', 0) for l in legs_base)
-            new_tce = (
-                result['revenue'] * (1 - brokerage_pct_ui / 100.0)
-                - result['bunker']
-                - sum(l.get('port_costs', 0) for l in legs_base)
-                - sum(l.get('insurance', 0) for l in legs_base)
-                - sum(l.get('other_costs', 1000) for l in legs_base)
-            ) / max(total_days, 1)
-
-            st.markdown("#### Adjusted Programme KPIs")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Base Profit",     f"${base_profit:,.0f}")
-            c2.metric("Adjusted Profit", f"${new_profit:,.0f}",
-                      delta=f"${profit_delta:+,.0f} ({profit_delta_pct:+.1f}%)",
-                      delta_color="normal" if profit_delta >= 0 else "inverse")
-            c3.metric("Adjusted TCE",    f"${new_tce:,.0f}/day",
-                      delta=f"${new_tce - base_tce:+,.0f}/day",
-                      delta_color="normal" if new_tce >= base_tce else "inverse")
-            c4.metric("Break-even?",
-                      "✅ Profitable" if new_profit > 0 else "❌ Loss-making")
-
-            # Tornado chart
-            st.markdown("#### Tornado Chart — Single Variable Impact")
-            test_ranges = {
-                'Bunker +40%':              recalculate_sensitivity(legs_base,  40,   0,   0)['profit'],
-                'Bunker -40%':              recalculate_sensitivity(legs_base, -40,   0,   0)['profit'],
-                'Freight +20%':             recalculate_sensitivity(legs_base,   0,  20,   0)['profit'],
-                'Freight -20%':             recalculate_sensitivity(legs_base,   0, -20,   0)['profit'],
-                'Hire +30%':                recalculate_sensitivity(legs_base,   0,   0,  30)['profit'],
-                'Hire -30%':                recalculate_sensitivity(legs_base,   0,   0, -30)['profit'],
-                'Bunker +20%, Freight -10%':recalculate_sensitivity(legs_base,  20, -10,   0)['profit'],
-            }
-            tornado_df = pd.DataFrame([
-                {
-                    'Scenario': k,
-                    'Profit': v,
-                    'Delta': v - base_profit,
-                    'Color': '#22c55e' if v >= base_profit else '#ef4444',
-                }
-                for k, v in test_ranges.items()
-            ]).sort_values('Delta')
-
-            fig_tornado = go.Figure()
-            fig_tornado.add_trace(go.Bar(
-                y=tornado_df['Scenario'],
-                x=tornado_df['Delta'],
-                orientation='h',
-                marker_color=tornado_df['Color'].tolist(),
-                text=[f"${v:,.0f}" for v in tornado_df['Profit']],
-                textposition='outside',
-            ))
-            fig_tornado.add_vline(x=0, line_color='#1a3a5c', line_width=2)
-            fig_tornado.update_layout(
-                title="Profit impact of single-variable changes vs base case",
-                xaxis_title="Change in Annual Profit (USD)",
-                height=420,
-                yaxis=dict(tickfont=dict(size=11)),
-            )
-            st.plotly_chart(fig_tornado, use_container_width=True)
-
-            # Scenario comparison table
-            st.markdown("#### Scenario Comparison Table")
-            scenarios = {
-                'Base case':             (0,   0,   0),
-                'Bunker spike +30%':     (30,  0,   0),
-                'Freight market -15%':   (0,  -15,  0),
-                'Hire +20%':             (0,   0,  20),
-                'Bull market (fr +20%)': (0,  20,   0),
-                'Bear market':           (20, -20,  10),
-                'Perfect storm':         (40, -20,  20),
-                'Your current sliders':  (bunker_delta, freight_delta, hire_delta),
-            }
-            scen_rows = []
-            for name, (b, f, h) in scenarios.items():
-                r = recalculate_sensitivity(legs_base, b, f, h)
-                scen_rows.append({
-                    'Scenario':      name,
-                    'Bunker Δ':      f"{b:+d}%",
-                    'Freight Δ':     f"{f:+d}%",
-                    'Hire Δ':        f"{h:+d}%",
-                    'Annual Profit': f"${r['profit']:,.0f}",
-                    'vs Base':       f"${r['profit'] - base_profit:+,.0f}",
-                    'Profitable':    '✅' if r['profit'] > 0 else '❌',
-                })
-            st.dataframe(
-                pd.DataFrame(scen_rows),
-                use_container_width=True,
-                hide_index=True,
-                height=320,
-            )
+# HIDDEN: Sensitivity tab — temporarily disabled
+# with tabs[3]:
+#     if 'analysis' not in st.session_state:
+#         st.info("Run the simulation first.")
+#     else:
+#         st.markdown("### Sensitivity Analysis")
+#         st.markdown(
+#             "Adjust the sliders to see how changes in market conditions "
+#             "affect the top programme's profitability — instantly."
+#         )
+#         analysis = st.session_state['analysis']
+#         vessel   = st.session_state.get('vessel')
+#         top_prog = analysis['top_programmes'][0] if analysis['top_programmes'] else None
+#         if top_prog is None or vessel is None:
+#             st.warning("No results available.")
+#         else:
+#             legs_base   = top_prog['legs']
+#             base_profit = top_prog['total_profit']
+#             base_tce    = top_prog['avg_tce']
+#             st.markdown("#### Market Scenario Sliders")
+#             col1, col2, col3 = st.columns(3)
+#             with col1:
+#                 bunker_delta = st.slider("Bunker Price Change (%)",
+#                     min_value=-40, max_value=60, value=0, step=5,
+#                     help="±% change applied to both LSFO and MGO prices")
+#             with col2:
+#                 freight_delta = st.slider("Freight Rate Change (%)",
+#                     min_value=-40, max_value=40, value=0, step=5,
+#                     help="±% change applied to all freight rates")
+#             with col3:
+#                 hire_delta = st.slider("Charter Hire Change (%)",
+#                     min_value=-30, max_value=50, value=0, step=5,
+#                     help="±% change in daily charter hire rate")
+#             def recalculate_sensitivity(legs, bunker_pct, freight_pct, hire_pct):
+#                 b_mult = 1 + bunker_pct / 100
+#                 f_mult = 1 + freight_pct / 100
+#                 h_mult = 1 + hire_pct / 100
+#                 new_profit = new_revenue = new_bunker = new_hire = 0.0
+#                 for leg in legs:
+#                     gross = leg.get('gross_freight', leg.get('revenue', 0)) * f_mult
+#                     brok  = gross * (brokerage_pct_ui / 100.0)
+#                     ni    = gross - brok
+#                     bunk  = leg.get('bunker_cost', 0) * b_mult
+#                     hire  = leg.get('charter_hire', leg.get('charter_hire_cost', 0)) * h_mult
+#                     port  = leg.get('port_costs', 0)
+#                     ins   = leg.get('insurance', 0)
+#                     oth   = leg.get('other_costs', 1000)
+#                     exp   = hire + bunk + port + ins + oth
+#                     pl    = ni - exp
+#                     new_profit += pl; new_revenue += gross
+#                     new_bunker += bunk; new_hire += hire
+#                 return {'profit': new_profit, 'revenue': new_revenue,
+#                         'bunker': new_bunker, 'hire': new_hire}
+#             result       = recalculate_sensitivity(legs_base, bunker_delta, freight_delta, hire_delta)
+#             new_profit   = result['profit']
+#             profit_delta = new_profit - base_profit
+#             profit_delta_pct = (profit_delta / abs(base_profit)) * 100 if base_profit != 0 else 0
+#             total_days   = sum(l.get('total_days', 0) for l in legs_base)
+#             new_tce = (
+#                 result['revenue'] * (1 - brokerage_pct_ui / 100.0)
+#                 - result['bunker']
+#                 - sum(l.get('port_costs', 0) for l in legs_base)
+#                 - sum(l.get('insurance', 0) for l in legs_base)
+#                 - sum(l.get('other_costs', 1000) for l in legs_base)
+#             ) / max(total_days, 1)
+#             st.markdown("#### Adjusted Programme KPIs")
+#             c1, c2, c3, c4 = st.columns(4)
+#             c1.metric("Base Profit", f"${base_profit:,.0f}")
+#             c2.metric("Adjusted Profit", f"${new_profit:,.0f}",
+#                 delta=f"${profit_delta:+,.0f} ({profit_delta_pct:+.1f}%)",
+#                 delta_color="normal" if profit_delta >= 0 else "inverse")
+#             c3.metric("Adjusted TCE", f"${new_tce:,.0f}/day",
+#                 delta=f"${new_tce - base_tce:+,.0f}/day",
+#                 delta_color="normal" if new_tce >= base_tce else "inverse")
+#             c4.metric("Break-even?", "✅ Profitable" if new_profit > 0 else "❌ Loss-making")
+#             st.markdown("#### Tornado Chart — Single Variable Impact")
+#             test_ranges = {
+#                 'Bunker +40%': recalculate_sensitivity(legs_base,  40,   0,   0)['profit'],
+#                 'Bunker -40%': recalculate_sensitivity(legs_base, -40,   0,   0)['profit'],
+#                 'Freight +20%': recalculate_sensitivity(legs_base,  0,  20,   0)['profit'],
+#                 'Freight -20%': recalculate_sensitivity(legs_base,  0, -20,   0)['profit'],
+#                 'Hire +30%': recalculate_sensitivity(legs_base,    0,   0,  30)['profit'],
+#                 'Hire -30%': recalculate_sensitivity(legs_base,    0,   0, -30)['profit'],
+#                 'Bunker +20%, Freight -10%': recalculate_sensitivity(legs_base, 20, -10, 0)['profit'],
+#             }
+#             tornado_df = pd.DataFrame([
+#                 {'Scenario': k, 'Profit': v, 'Delta': v - base_profit,
+#                  'Color': '#22c55e' if v >= base_profit else '#ef4444'}
+#                 for k, v in test_ranges.items()
+#             ]).sort_values('Delta')
+#             fig_tornado = go.Figure()
+#             fig_tornado.add_trace(go.Bar(
+#                 y=tornado_df['Scenario'], x=tornado_df['Delta'], orientation='h',
+#                 marker_color=tornado_df['Color'].tolist(),
+#                 text=[f"${v:,.0f}" for v in tornado_df['Profit']],
+#                 textposition='outside'))
+#             fig_tornado.add_vline(x=0, line_color='#1a3a5c', line_width=2)
+#             fig_tornado.update_layout(
+#                 title="Profit impact of single-variable changes vs base case",
+#                 xaxis_title="Change in Annual Profit (USD)", height=420,
+#                 yaxis=dict(tickfont=dict(size=11)))
+#             st.plotly_chart(fig_tornado, use_container_width=True)
+#             st.markdown("#### Scenario Comparison Table")
+#             scenarios = {
+#                 'Base case': (0, 0, 0), 'Bunker spike +30%': (30, 0, 0),
+#                 'Freight market -15%': (0, -15, 0), 'Hire +20%': (0, 0, 20),
+#                 'Bull market (fr +20%)': (0, 20, 0), 'Bear market': (20, -20, 10),
+#                 'Perfect storm': (40, -20, 20),
+#                 'Your current sliders': (bunker_delta, freight_delta, hire_delta),
+#             }
+#             scen_rows = []
+#             for name, (b, f, h) in scenarios.items():
+#                 r = recalculate_sensitivity(legs_base, b, f, h)
+#                 scen_rows.append({
+#                     'Scenario': name, 'Bunker Δ': f"{b:+d}%",
+#                     'Freight Δ': f"{f:+d}%", 'Hire Δ': f"{h:+d}%",
+#                     'Annual Profit': f"${r['profit']:,.0f}",
+#                     'vs Base': f"${r['profit'] - base_profit:+,.0f}",
+#                     'Profitable': '✅' if r['profit'] > 0 else '❌'})
+#             st.dataframe(pd.DataFrame(scen_rows), use_container_width=True,
+#                 hide_index=True, height=320)
 
 # ─── SIMULATION RUN (outside tabs — triggered from sidebar) ──────────────────
 if run_simulation_clicked and os.path.exists(DATA_PATH):
@@ -2252,6 +2389,24 @@ if run_simulation_clicked and os.path.exists(DATA_PATH):
 
         analysis = analyse_results(results, ports)
 
+        # ── Persist to SQLite ─────────────────────────────────────────────
+        try:
+            _db_run_id = save_run(
+                DB_PATH,
+                results=results,
+                analysis=analysis,
+                vessel=vessel,
+                sim_config=sim_config,
+                elapsed_sec=elapsed,
+                vessel_name=st.session_state.get('vessel_name', ''),
+                vessel_imo=st.session_state.get('vessel_imo', ''),
+                top_n=50,
+            )
+            st.session_state['last_db_run_id'] = _db_run_id
+        except Exception as _db_err:
+            st.session_state['last_db_run_id'] = None
+            st.warning(f"DB save failed (simulation results are still available): {_db_err}")
+
         # ── Write diagnostic log ──────────────────────────────────────────
         try:
             import modules.data_processor as _dp
@@ -2311,8 +2466,8 @@ if run_simulation_clicked and os.path.exists(DATA_PATH):
     # Rerun so all tabs render with the newly stored results
     st.rerun()
 
-# ─── TAB 6: VOYAGE ANALYSIS ──────────────────────────────────────────────────
-with tabs[4]:
+# ─── TAB 3: VOYAGE ANALYSIS ──────────────────────────────────────────────────
+with tabs[2]:
     if 'analysis' not in st.session_state:
         st.info(
             "Run the simulation first — click 🚀 Run Simulation "
@@ -3269,8 +3424,8 @@ with tabs[4]:
             unsafe_allow_html=True
         )
 
-# ─── TAB 7: VOYAGE JOURNEY (animated vessel) ─────────────────────────────────
-with tabs[5]:
+# ─── TAB 4: VOYAGE JOURNEY (animated vessel) ─────────────────────────────────
+with tabs[3]:
     if 'analysis' not in st.session_state:
         st.info(
             "Run the simulation first — click 🚀 Run Simulation "
@@ -3301,6 +3456,16 @@ with tabs[5]:
             }
 
         def _calc_nm_vj(pa, pb):
+            """Return sea distance NM between two ports.
+            Uses real matrix first; falls back to Haversine × correction factor."""
+            try:
+                from data.sea_distances_loader import get_sea_distance_nm
+                nm = get_sea_distance_nm(pa, pb)
+                if nm and nm > 0:
+                    return round(nm)
+            except Exception:
+                pass
+            # Fallback: Haversine × factor
             if pa not in port_coords_vj or pb not in port_coords_vj:
                 return 0
             la1, lo1 = port_coords_vj[pa]
@@ -3350,23 +3515,74 @@ with tabs[5]:
 
         def _get_sea_route_lats_lons_vj(port_a, port_b, p_coords):
             """
-            Return (lats, lons) for sea route between two ports.
-            Uses real Searoute waypoints if available; falls back to geodesic arc.
+            Return (lats, lons) for the realistic maritime route between two ports.
+            Priority:
+              1. Session-state cache (instant — avoids recomputing across rerenders)
+              2. searoute library — realistic maritime routing avoiding land masses
+              3. Geodesic arc fallback (great-circle, used only when searoute fails)
             """
-            try:
-                waypoints = get_sea_route_coords(port_a, port_b)
-                if waypoints and len(waypoints) > 2:
-                    lons = [w[0] for w in waypoints]
-                    lats = [w[1] for w in waypoints]
-                    return lats, lons
-            except Exception:
-                pass
-            # Fallback to geodesic arc
+            import math as _m
+
+            # ── per-session route cache ───────────────────────────────────────
+            _cache = st.session_state.setdefault('_vj_route_cache', {})
+            _key   = f"{port_a}||{port_b}"
+            if _key in _cache:
+                return _cache[_key]
+
+            def _hav(la1, lo1, la2, lo2):
+                R = 3440.065
+                la1, lo1, la2, lo2 = map(_m.radians, [la1, lo1, la2, lo2])
+                a = (_m.sin((la2-la1)/2)**2
+                     + _m.cos(la1)*_m.cos(la2)*_m.sin((lo2-lo1)/2)**2)
+                return 2*R*_m.asin(_m.sqrt(a))
+
+            def _validate(la_r, lo_r):
+                if len(la_r) < 3:
+                    return False
+                # Reject routes with implausible longitude jumps (wrapping artefacts)
+                if any(abs(lo_r[i+1]-lo_r[i]) > 60 for i in range(len(lo_r)-1)):
+                    return False
+                # Reject routes longer than 3× straight-line distance
+                if port_a in p_coords and port_b in p_coords:
+                    la1, lo1 = p_coords[port_a]
+                    la2, lo2 = p_coords[port_b]
+                    straight = _hav(la1, lo1, la2, lo2)
+                    if straight > 0:
+                        total = sum(_hav(la_r[i], lo_r[i], la_r[i+1], lo_r[i+1])
+                                    for i in range(len(la_r)-1))
+                        if total > straight * 3.2:
+                            return False
+                return True
+
+            result = None
+
+            # ── searoute library (primary — realistic maritime corridors) ────
             if port_a in p_coords and port_b in p_coords:
+                try:
+                    import searoute as _sr
+                    la1, lo1 = p_coords[port_a]
+                    la2, lo2 = p_coords[port_b]
+                    geo    = _sr.searoute([lo1, la1], [lo2, la2])
+                    coords = geo['geometry']['coordinates']  # [[lon, lat], ...]
+                    if coords and len(coords) >= 3:
+                        lo_r = [c[0] for c in coords]
+                        la_r = [c[1] for c in coords]
+                        if _validate(la_r, lo_r):
+                            result = (la_r, lo_r)
+                except Exception:
+                    pass
+
+            # ── geodesic fallback ────────────────────────────────────────────
+            if result is None and port_a in p_coords and port_b in p_coords:
                 la1, lo1 = p_coords[port_a]
                 la2, lo2 = p_coords[port_b]
-                return _geodesic_vj(la1, lo1, la2, lo2)
-            return [], []
+                result = _geodesic_vj(la1, lo1, la2, lo2)
+
+            if result is None:
+                result = ([], [])
+
+            _cache[_key] = result
+            return result
 
         # ── Programme selector ────────────────────────────────────────
         hc1, hc2, hc3 = st.columns([3, 1, 1])
@@ -3557,7 +3773,7 @@ with tabs[5]:
 <style>
 * {{ margin:0; padding:0; box-sizing:border-box; }}
 body {{ background:#0a1628; font-family:-apple-system,sans-serif; }}
-#map-wrap {{ position:relative; width:100%; height:480px; }}
+#map-wrap {{ position:relative; width:100%; height:480px; transition:height .3s; }}
 #map {{ position:absolute; inset:0; border-radius:10px; overflow:hidden; }}
 .controls {{ display:flex; align-items:center; gap:8px; margin:8px 0 4px; flex-wrap:wrap; }}
 .btn {{ background:#1a3a5c; color:white; border:none; padding:7px 16px;
@@ -3575,6 +3791,21 @@ select {{ padding:6px 10px; border-radius:8px; border:1px solid #334155;
 .stat-lbl {{ font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:.05em; }}
 .stat-val {{ font-size:12px; font-weight:500; color:#e2e8f0; margin-top:2px;
              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+/* ── Full-screen button ── */
+.fs-btn {{
+  position:absolute; top:10px; right:10px; z-index:1100;
+  background:rgba(10,22,40,0.80); border:1px solid rgba(255,255,255,0.18);
+  border-radius:8px; color:#e2e8f0; padding:5px 9px;
+  cursor:pointer; font-size:17px; line-height:1; backdrop-filter:blur(4px);
+}}
+.fs-btn:hover {{ background:rgba(45,89,134,0.90); }}
+/* ── Full-screen overrides ── */
+:-webkit-full-screen body {{ background:#0a1628; overflow:hidden; }}
+:fullscreen          body {{ background:#0a1628; overflow:hidden; }}
+:-webkit-full-screen #map-wrap {{ height:calc(100vh - 170px) !important; }}
+:fullscreen          #map-wrap {{ height:calc(100vh - 170px) !important; }}
+:-webkit-full-screen .stats {{ grid-template-columns:repeat(7,1fr); }}
+:fullscreen          .stats {{ grid-template-columns:repeat(7,1fr); }}
 #route-popup {{
   position:absolute; z-index:1000;
   background:rgba(15,23,42,0.97);
@@ -3623,6 +3854,7 @@ select {{ padding:6px 10px; border-radius:8px; border:1px solid #334155;
     </div>
   </div>
   <canvas id="route-overlay" style="position:absolute;inset:0;z-index:500;pointer-events:none;background:transparent;display:block;"></canvas>
+  <button class="fs-btn" id="fsBtnEl" onclick="toggleFullscreen()" title="Full screen / Exit full screen">&#x26F6;</button>
   <div id="route-popup">
     <button class="pp-close" onclick="closeRoutePopup()">&#10005;</button>
     <div class="pp-title" id="pp-title-el"></div>
@@ -3736,10 +3968,18 @@ traces.push({{
   opacity:1, hoverinfo:'skip', showlegend:false, name:'active_ballast'
 }});
 
+// Glow halo behind the active laden arc (wide + semi-transparent)
+const ACTIVE_GLOW_IDX = traces.length;
+traces.push({{
+  type:'scattermapbox', lat:[], lon:[], mode:'lines',
+  line:{{width:16, color:'rgba(245,158,11,0.18)'}},
+  opacity:1, hoverinfo:'skip', showlegend:false, name:'active_glow'
+}});
+
 const ACTIVE_ARC_IDX = traces.length;
 traces.push({{
   type:'scattermapbox', lat:[], lon:[], mode:'lines',
-  line:{{width:5, color:'#f59e0b'}},
+  line:{{width:7, color:'#f59e0b'}},
   opacity:1, hoverinfo:'skip', showlegend:false, name:'active_arc'
 }});
 
@@ -3769,6 +4009,31 @@ Plotly.newPlot('map', traces, layout, {{
     projectedRoutes = null;
   }});
 }});
+
+// ── Full-screen ───────────────────────────────────────────────────────────
+function toggleFullscreen() {{
+  if (!document.fullscreenElement && !document.webkitFullscreenElement) {{
+    const el = document.documentElement;
+    if (el.requestFullscreen)       el.requestFullscreen();
+    else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+  }} else {{
+    if (document.exitFullscreen)       document.exitFullscreen();
+    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+  }}
+}}
+function _onFsChange() {{
+  const isFS = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  const wrap  = document.getElementById('map-wrap');
+  const fsBtn = document.getElementById('fsBtnEl');
+  const newH  = isFS ? Math.max(window.innerHeight - 172, 480) : 480;
+  wrap.style.height = newH + 'px';
+  Plotly.relayout('map', {{height: newH}});
+  resizeOverlay();
+  projectedRoutes = null;
+  if (fsBtn) fsBtn.textContent = isFS ? '⊞' : '⛶';
+}}
+document.addEventListener('fullscreenchange',       _onFsChange);
+document.addEventListener('webkitfullscreenchange', _onFsChange);
 
 // Animation state
 let playing=false, spd=60, curV=0, t=0, cumDays=0;
@@ -3944,7 +4209,7 @@ function resetAnim() {{
   document.getElementById('btnPlay').textContent='&#9654; Play';
   if(raf){{ cancelAnimationFrame(raf); raf=null; }}
   curV=0; t=0; cumDays=0; phase='ballast';
-  Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_BALLAST_IDX, ACTIVE_ARC_IDX]);
+  Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_BALLAST_IDX, ACTIVE_GLOW_IDX, ACTIVE_ARC_IDX]);
   document.getElementById('vessel-icon').style.display='none';
   document.getElementById('scrub').value=0;
   updateHUD();
@@ -3997,14 +4262,17 @@ function advance(dt) {{
     Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_BALLAST_IDX]);
   }}
 
-  // Update active laden trace
+  // Update active laden trace + glow halo
   if (!isBallastPhase && v2.lats.length) {{
-    const end = Math.floor(progress * v2.lats.length);
-    Plotly.restyle('map', {{
+    const end     = Math.floor(progress * v2.lats.length);
+    const arcSlab = {{
       lat: [v2.lats.slice(0, end+1)],
       lon: [v2.lons.slice(0, end+1)]
-    }}, [ACTIVE_ARC_IDX]);
+    }};
+    Plotly.restyle('map', arcSlab, [ACTIVE_GLOW_IDX]);
+    Plotly.restyle('map', arcSlab, [ACTIVE_ARC_IDX]);
   }} else {{
+    Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_GLOW_IDX]);
     Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_ARC_IDX]);
   }}
 
@@ -4055,7 +4323,7 @@ document.getElementById('scrub').addEventListener('input', function(e) {{
   const pct = parseInt(e.target.value) / 100;
   curV  = Math.min(Math.floor(pct * VOYAGES.length), VOYAGES.length-1);
   t=0; phase='ballast'; cumDays=0;
-  Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_BALLAST_IDX, ACTIVE_ARC_IDX]);
+  Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_BALLAST_IDX, ACTIVE_GLOW_IDX, ACTIVE_ARC_IDX]);
   updateHUD();
 }});
 
@@ -4112,7 +4380,15 @@ updateHUD();
         sc6.metric("Days Elapsed", f"{sel_days:.0f} d")
 
         # ── Canvas ───────────────────────────────────────────────────────
-        st.components.v1.html(MARITIME_HTML, height=570, scrolling=False)
+        _vj_exp = st.session_state.get('vj_map_expanded', False)
+        _exp_col, _ = st.columns([1, 9])
+        with _exp_col:
+            if st.button('⛶ Expand' if not _vj_exp else '⊠ Collapse',
+                         key='vj_expand_btn', use_container_width=True):
+                st.session_state['vj_map_expanded'] = not _vj_exp
+                st.rerun()
+        _map_iframe_h = 950 if _vj_exp else 600
+        st.components.v1.html(MARITIME_HTML, height=_map_iframe_h, scrolling=False)
 
         # ── Elements AFTER canvas ─────────────────────────────────────────
 
@@ -4169,6 +4445,63 @@ updateHUD();
                     unsafe_allow_html=True
                 )
 
+            with st.expander(f"💡 Why voyage {i+1}? — Decision rationale", expanded=False):
+                op_l  = leg.get('origin_port', '')
+                dp_l  = leg.get('dest_port', '')
+                fr_l  = leg.get('freight_rate', 0)
+                pl_l  = leg.get('profit_loss', leg.get('profit', 0))
+                nm_l  = leg.get('laden_nm', leg.get('distance_nm', 0))
+                tce_l = pl_l / max(leg.get('total_days', 1), 1)
+                cargo_l = leg.get('cargo_mt', 0)
+                comm_l  = leg.get('commodity', '—')
+                prev_dest = legs_vj[i-1].get('dest_port', '—') if i > 0 else 'Start'
+
+                port_meta  = _get_meta_vj(dp_l)
+                cong_score = port_meta.get('cong', 1.0)
+                nav_cost   = port_meta.get('nav', 10000)
+                country_l  = port_meta.get('country', '—')
+
+                cong_label = ("low congestion" if cong_score < 1.2
+                              else "moderate congestion" if cong_score < 2.0
+                              else "high congestion — factored into cost")
+                pl_label   = "profitable" if pl_l > 0 else "loss-making but strategically positioned"
+                tce_label  = ("above market" if tce_l > 8500
+                              else "near market" if tce_l > 5500
+                              else "below market — offset by positioning value")
+
+                ball_nm   = leg.get('ballast_nm', 0)
+                ball_d    = leg.get('ballast_days', 0)
+                ball_from = leg.get('ballast_from_port', prev_dest)
+
+                st.markdown(
+                    f"""
+<div style='background:#f8fafc;border-left:3px solid #3b82f6;
+     border-radius:0 8px 8px 0;padding:12px 14px;font-size:12px;
+     color:#1e293b;line-height:1.7'>
+
+<b>📍 Port selection — {dp_l}, {country_l}</b><br>
+The simulation selected <b>{dp_l}</b> as the discharge port for this voyage because it
+offered the highest risk-adjusted TCE (${tce_l:,.0f}/day) among all reachable ports
+from <b>{op_l}</b> carrying <b>{comm_l}</b>. The port has {cong_label} (factor: {cong_score:.1f}x)
+and a navigation charge of ${nav_cost:,}. Across {n_iterations:,} Monte Carlo iterations,
+this route appeared in the top-performing programmes most frequently.
+
+<br><b>🚢 Ballast leg</b> — {ball_from} → {op_l}: {ball_nm:,.0f} NM over {ball_d:.1f} days.
+This empty repositioning cost was included in the P&L calculation.
+
+<br><b>📦 Cargo decision — {comm_l}</b><br>
+{comm_l} was selected because it had the highest available freight rate (${fr_l:.2f}/MT)
+on this route in the simulation's cargo library, with a cargo size of {cargo_l:,.0f} MT
+({cargo_l/max(vessel_vj.dwcc if vessel_vj else 1, 1)*100:.0f}% of DWCC).
+Voyage is {pl_label} with a TCE {tce_label} (${tce_l:,.0f}/day vs $8,500 benchmark).
+
+<br><b>💰 Outcome</b> — Distance: {nm_l:,.0f} NM · P&L: {'+'if pl_l>=0 else ''}${pl_l:,.0f} ·
+TCE: ${tce_l:,.0f}/day
+
+</div>""",
+                    unsafe_allow_html=True
+                )
+
         # Element 4 — Legend + MarineTraffic link
         leg1, leg2, leg3, leg4, leg5 = st.columns(5)
         leg1.markdown(
@@ -4206,8 +4539,8 @@ updateHUD();
             unsafe_allow_html=True
         )
 
-# ─── TAB 7: PORT VALIDATION ──────────────────────────────────────────────────
-with tabs[6]:
+# ─── TAB 5: PORT VALIDATION ──────────────────────────────────────────────────
+with tabs[4]:
     st.markdown("### ⚓ Port Validation Report")
     st.markdown(
         "Shows all database ports filtered against vessel physical dimensions. "
