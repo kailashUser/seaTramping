@@ -815,6 +815,64 @@ if st.session_state.get('sim_done') and 'analysis' in st.session_state:
         f"Navigate to any tab above to explore results."
     )
 
+# ── Full-page freeze overlay while simulation runs ────────────────────────────
+if _sim_locked:
+    st.markdown(
+        """
+<style>
+#sim-freeze {
+    position:fixed; inset:0; z-index:99999;
+    background:rgba(8,16,36,0.72);
+    backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px);
+    display:flex; align-items:center; justify-content:center;
+    pointer-events:all;
+}
+.sim-freeze-card {
+    background:linear-gradient(135deg,#0f2a4a,#1a3a5c);
+    border:1px solid rgba(245,158,11,0.35);
+    border-radius:20px; padding:40px 56px;
+    text-align:center;
+    box-shadow:0 24px 64px rgba(0,0,0,0.6);
+    max-width:420px;
+}
+.sim-freeze-spinner {
+    width:52px; height:52px; border-radius:50%;
+    border:4px solid rgba(245,158,11,0.2);
+    border-top-color:#f59e0b;
+    animation:spin 0.9s linear infinite;
+    margin:0 auto 20px;
+}
+@keyframes spin { to { transform:rotate(360deg); } }
+.sim-freeze-title {
+    font-size:1.25rem; font-weight:700; color:#f1f5f9;
+    margin-bottom:10px; font-family:-apple-system,sans-serif;
+}
+.sim-freeze-sub {
+    font-size:0.82rem; color:#94a3b8; line-height:1.6;
+    font-family:-apple-system,sans-serif;
+}
+.sim-freeze-lock {
+    display:inline-block; margin-top:18px;
+    background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.3);
+    border-radius:8px; padding:5px 14px;
+    font-size:0.75rem; color:#f59e0b; font-family:-apple-system,sans-serif;
+}
+</style>
+<div id="sim-freeze">
+  <div class="sim-freeze-card">
+    <div class="sim-freeze-spinner"></div>
+    <div class="sim-freeze-title">&#9881; Simulation Running</div>
+    <div class="sim-freeze-sub">
+      Monte Carlo engine is exploring voyage programmes.<br>
+      All tabs and controls are locked until complete.
+    </div>
+    <div class="sim-freeze-lock">&#128274; UI Locked</div>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
 tabs = st.tabs([
     "🌏 Network & Data",
     "📈 Summary Results",
@@ -3916,7 +3974,7 @@ VOYAGES.forEach((v, vi) => {{
     traces.push({{
       type:'scattermapbox',
       lat: v.ballast_lats, lon: v.ballast_lons, mode:'lines',
-      line:{{width:1.5, color:'rgba(148,163,184,0.25)'}},
+      line:{{width:2, color:'rgba(148,163,184,0.40)'}},
       opacity:1, hoverinfo:'skip', showlegend:false, name:'ballast_'+vi
     }});
   }}
@@ -3925,7 +3983,7 @@ VOYAGES.forEach((v, vi) => {{
   traces.push({{
     type:'scattermapbox',
     lat: v.lats, lon: v.lons, mode:'lines',
-    line:{{width:2, color:col}}, opacity:0.22,
+    line:{{width:2.5, color:col}}, opacity:0.38,
     hoverinfo:'skip', showlegend:false, name:'arc_'+vi
   }});
 }});
@@ -3964,7 +4022,7 @@ traces.push({{
 const ACTIVE_BALLAST_IDX = traces.length;
 traces.push({{
   type:'scattermapbox', lat:[], lon:[], mode:'lines',
-  line:{{width:3, color:'rgba(148,163,184,0.85)'}},
+  line:{{width:4, color:'rgba(148,163,184,0.90)'}},
   opacity:1, hoverinfo:'skip', showlegend:false, name:'active_ballast'
 }});
 
@@ -4008,6 +4066,23 @@ Plotly.newPlot('map', traces, layout, {{
   document.getElementById('map').on('plotly_relayout', function() {{
     projectedRoutes = null;
   }});
+
+  // Auto-fit map to show all voyage routes on load
+  (function autoFit() {{
+    let minLat=90, maxLat=-90, minLon=180, maxLon=-180;
+    VOYAGES.forEach(v => {{
+      const allLat = (v.lats||[]).concat(v.ballast_lats||[]);
+      const allLon = (v.lons||[]).concat(v.ballast_lons||[]);
+      allLat.forEach(la => {{ if(la<minLat) minLat=la; if(la>maxLat) maxLat=la; }});
+      allLon.forEach(lo => {{ if(lo<minLon) minLon=lo; if(lo>maxLon) maxLon=lo; }});
+    }});
+    if (maxLat > minLat) {{
+      const cLat=(minLat+maxLat)/2, cLon=(minLon+maxLon)/2;
+      const span=Math.max(maxLat-minLat, maxLon-minLon, 1);
+      const zoom=Math.max(1.5, Math.min(5.5, Math.log2(360/span)+0.3));
+      Plotly.relayout('map', {{'mapbox.center':{{lat:cLat,lon:cLon}}, 'mapbox.zoom':zoom}});
+    }}
+  }})();
 }});
 
 // ── Full-screen ───────────────────────────────────────────────────────────
@@ -4200,13 +4275,13 @@ function setSpd(v) {{ spd=parseInt(v); }}
 
 function togglePlay() {{
   playing=!playing;
-  document.getElementById('btnPlay').textContent = playing ? '&#9646;&#9646; Pause' : '&#9654; Play';
+  document.getElementById('btnPlay').innerHTML = playing ? '&#9646;&#9646; Pause' : '&#9654; Play';
   if (playing && !raf) {{ lastTs=null; raf=requestAnimationFrame(tick); }}
 }}
 
 function resetAnim() {{
   playing=false;
-  document.getElementById('btnPlay').textContent='&#9654; Play';
+  document.getElementById('btnPlay').innerHTML='&#9654; Play';
   if(raf){{ cancelAnimationFrame(raf); raf=null; }}
   curV=0; t=0; cumDays=0; phase='ballast';
   Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_BALLAST_IDX, ACTIVE_GLOW_IDX, ACTIVE_ARC_IDX]);
@@ -4241,7 +4316,7 @@ function advance(dt) {{
       phase = 'ballast';
       if (curV >= VOYAGES.length) {{
         curV=VOYAGES.length-1; t=1; playing=false;
-        document.getElementById('btnPlay').textContent='&#9654; Play';
+        document.getElementById('btnPlay').innerHTML='&#9654; Play';
         if(raf){{ cancelAnimationFrame(raf); raf=null; }}
       }}
     }}
@@ -4318,7 +4393,7 @@ function updateHUD() {{
 
 // Scrub bar manual seek
 document.getElementById('scrub').addEventListener('input', function(e) {{
-  if(playing){{ playing=false; document.getElementById('btnPlay').textContent='&#9654; Play';
+  if(playing){{ playing=false; document.getElementById('btnPlay').innerHTML='&#9654; Play';
                 if(raf){{ cancelAnimationFrame(raf); raf=null; }} }}
   const pct = parseInt(e.target.value) / 100;
   curV  = Math.min(Math.floor(pct * VOYAGES.length), VOYAGES.length-1);
