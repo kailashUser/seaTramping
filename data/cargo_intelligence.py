@@ -3,6 +3,28 @@ Cargo Intelligence Layer for COMPASS simulation.
 Source: AXS Marine trade flow analysis + Cargo Analysis data.
 """
 
+# ── Stowage Factors (m³/MT) ──────────────────────────────────────────────────
+# Stowage factor = cubic metres of hold space consumed per metric tonne of cargo.
+# Higher SF → lighter/bulkier cargo → hold fills before weight limit is reached.
+
+STOWAGE_FACTORS = {
+    'Steam Coal':             1.00,
+    'Coking Coal':            1.10,
+    'Nickel Ore':             0.60,
+    'Iron Ore':               0.55,
+    'Bauxite':                0.80,
+    'Clinker':                0.90,
+    'Palm Kernel Expeller':   1.60,
+    'Copra':                  1.60,
+    'Sugar':                  1.10,
+    'Steels':                 2.20,
+    'Fertilizers':            1.20,
+    'Rice':                   1.40,
+    'Grain':                  1.40,
+    'Dry Bulk':               1.20,
+}
+STOWAGE_DEFAULT = 1.20
+
 # ── Cargo Compatibility Matrix ───────────────────────────────────────────────
 # Cleaning grade: G=Good, W=Washable, S=Serious, X=Incompatible
 # Cost in USD for hold cleaning required before loading new cargo

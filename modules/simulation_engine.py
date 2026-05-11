@@ -41,6 +41,8 @@ try:
         get_cleaning_cost,
         get_backhaul_penalty,
         get_seasonal_factor,
+        STOWAGE_FACTORS,
+        STOWAGE_DEFAULT,
     )
     HAS_CARGO_INTEL = True
 except ImportError:
@@ -48,6 +50,8 @@ except ImportError:
     def get_cleaning_cost(a, b): return {"grade": "G", "days": 0.0, "cost": 0}
     def get_backhaul_penalty(c): return 1.0
     def get_seasonal_factor(c, m): return 1.0
+    STOWAGE_FACTORS = {}
+    STOWAGE_DEFAULT = 1.20
 
 
 # ─── VESSEL & SIM CONFIG ──────────────────────────────────────────────────────
@@ -94,6 +98,13 @@ class VesselConfig:
     draft_ballast: float = 5.5         # metres, ballast condition
     loa:           float = 147.0       # metres, length overall
     beam:          float = 25.0        # metres, beam
+    # Gross hold volume — drives stowage-factor cargo limit per commodity
+    # 0 = auto-compute from dwcc in __post_init__ (dwcc × 1.76)
+    hold_volume_m3: float = 0.0
+
+    def __post_init__(self):
+        if self.hold_volume_m3 == 0.0:
+            self.hold_volume_m3 = self.dwcc * 1.76
 
 
 @dataclass
@@ -465,13 +476,25 @@ class FastLegLibrary:
         self.commodities  = legs_df['commodity'].values
         self.categories   = legs_df['category'].values
 
+        # Stowage-factor-adjusted cargo MT per route
+        stowage_arr = np.array([
+            STOWAGE_FACTORS.get(str(comm), STOWAGE_DEFAULT)
+            for comm in self.commodities
+        ])
+        vol_limit_arr = vessel.hold_volume_m3 / stowage_arr
+        cargo_arr = np.minimum(vessel.dwcc, vol_limit_arr)
+        self.cargo_mt_arr = cargo_arr
+
+        # Loading/discharge days based on stowage-adjusted cargo MT
+        self.loading_days_arr = cargo_arr / self.load_rate
+        self.disch_days_arr   = cargo_arr / self.disch_rate
+
         # Port stay days — flat per commodity (from data_processor DEFAULT_PORT_STAY_DAYS)
         if 'port_stay_days' in legs_df.columns:
             self.port_stay_arr = legs_df['port_stay_days'].values.astype(np.float64)
         else:
-            # Fallback: compute from cargo rates
-            cargo = vessel.dwcc
-            self.port_stay_arr = cargo / self.load_rate + cargo / self.disch_rate
+            # Fallback: compute from stowage-adjusted cargo rates
+            self.port_stay_arr = self.loading_days_arr + self.disch_days_arr
 
         self.laden_days_arr = self.laden_nm / (vessel.speed_laden_knots * 24.0)
 
@@ -520,7 +543,7 @@ class FastLegLibrary:
         Returns profit_per_day array (same length as indices).
         """
         v = self.vessel
-        cargo = v.dwcc
+        cargo = self.cargo_mt_arr[indices]
         bd = ballast_nm / (v.speed_ballast_knots * 24.0)
 
         fr    = self.base_freight[indices] * freight_mult
@@ -571,7 +594,7 @@ class FastLegLibrary:
     ) -> VoyageLeg:
         """Build a full VoyageLeg from a leg index and runtime parameters."""
         v = self.vessel
-        cargo = v.dwcc
+        cargo = float(self.cargo_mt_arr[idx])
         load_cong  = float(self.load_cong_arr[idx]) * cong_mult
         disch_cong = float(self.disch_cong_arr[idx]) * cong_mult
         # Add tidal waiting penalty for restricted ports
