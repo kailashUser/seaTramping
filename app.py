@@ -816,6 +816,22 @@ DATA_PATH = os.path.join(os.path.dirname(__file__), 'data', 'D1_Port_Pair_Matrix
 DB_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'db', 'compass_runs.db')
 init_db(DB_PATH)
 
+# ── Verify pre-built sea-route data files (warn if missing on cloud) ─────────
+_JSON_PATH = os.path.join(os.path.dirname(__file__), 'data', 'port_sea_routes.json')
+_CSV_PATH  = os.path.join(os.path.dirname(__file__), 'data', 'port_sea_distances.csv')
+
+if not os.path.exists(_JSON_PATH):
+    st.sidebar.warning(
+        "⚠️ port_sea_routes.json not found. "
+        "Map routes will use straight-line arcs. "
+        "Run data/build_distance_matrix.py locally then commit the file."
+    )
+elif os.path.getsize(_JSON_PATH) < 1000:
+    st.sidebar.warning(
+        "⚠️ port_sea_routes.json appears empty. "
+        "Re-run data/build_distance_matrix.py locally."
+    )
+
 # ── Post-simulation success banner ───────────────────────────────────────────
 if st.session_state.get('sim_done') and 'analysis' in st.session_state:
     _res_done = st.session_state['results']
@@ -3753,8 +3769,9 @@ with tabs[3]:
             Return (lats, lons) for the realistic maritime route between two ports.
             Priority:
               1. Session-state cache (instant — avoids recomputing across rerenders)
-              2. searoute library — realistic maritime routing avoiding land masses
-              3. Geodesic arc fallback (great-circle, used only when searoute fails)
+              2. JSON waypoints from port_sea_routes.json (works on Streamlit Cloud)
+              3. Searoute library (local only — skipped silently on cloud)
+              4. Geodesic arc fallback (great-circle, used only as last resort)
             """
             import math as _m
 
@@ -3791,14 +3808,31 @@ with tabs[3]:
 
             result = None
 
-            # ── searoute library (primary — realistic maritime corridors) ────
-            if port_a in p_coords and port_b in p_coords:
+            # ── Step 1: Pre-built JSON waypoints (PRIMARY — works on cloud) ──
+            # Uses port_sea_routes.json built by build_distance_matrix.py.
+            # Fast, accurate, no internet required — correct first choice.
+            try:
+                from data.sea_distances_loader import get_sea_route_coords
+                _wpts = get_sea_route_coords(port_a, port_b)
+                if _wpts and len(_wpts) >= 3:
+                    lo_r = [w[0] for w in _wpts]
+                    la_r = [w[1] for w in _wpts]
+                    if _validate(la_r, lo_r):
+                        result = (la_r, lo_r)
+            except Exception:
+                pass
+
+            # ── Step 2: Searoute library (SECONDARY — local only) ────────────
+            # Only called when JSON does not cover this route pair.
+            # Fails silently on Streamlit Cloud — that is acceptable because
+            # the JSON should cover all active simulation ports.
+            if result is None and port_a in p_coords and port_b in p_coords:
                 try:
                     import searoute as _sr
                     la1, lo1 = p_coords[port_a]
                     la2, lo2 = p_coords[port_b]
                     geo    = _sr.searoute([lo1, la1], [lo2, la2])
-                    coords = geo['geometry']['coordinates']  # [[lon, lat], ...]
+                    coords = geo['geometry']['coordinates']
                     if coords and len(coords) >= 3:
                         lo_r = [c[0] for c in coords]
                         la_r = [c[1] for c in coords]
@@ -3807,7 +3841,9 @@ with tabs[3]:
                 except Exception:
                     pass
 
-            # ── geodesic fallback ────────────────────────────────────────────
+            # ── Step 3: Geodesic arc fallback (last resort) ───────────────────
+            # Used when neither JSON nor Searoute has the route.
+            # Draws a curved arc — not a real sea route, but never crashes.
             if result is None and port_a in p_coords and port_b in p_coords:
                 la1, lo1 = p_coords[port_a]
                 la2, lo2 = p_coords[port_b]
