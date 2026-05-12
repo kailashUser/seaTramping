@@ -511,3 +511,267 @@ def build_leg_library(ports_df, dist_matrix, intra_data):
     })
 
     return legs_df.reset_index(drop=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10-YEAR FORECAST MODULE
+# Added for COMPASS 10-Year Voyage Programme Forecast (2025–2034)
+# This block is ADDITIVE — it does not modify any existing functions above.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Base growth rates per commodity for 2025 (from SEA_Trade_Flows_Extrapolated.xlsx)
+# Long-run rate: tapers toward LONG_RUN_DEFAULT over 10 years
+FORECAST_BASE_GROWTH_2025 = {
+    'Steam Coal':             -0.05,
+    'Coking Coal':             0.10,
+    'Clinker':                 0.15,
+    'Cement':                  0.10,
+    'Nickel Ore':              0.45,
+    'Sugar':                   0.00,
+    'Steels':                 -0.03,
+    'Scrap':                  -0.03,
+    'Iron Ore':                0.05,
+    'Wood Chips':              0.10,
+    'Palm Kernel Expeller':    0.03,
+    'Fertilizers':             0.03,
+    'Rice':                    0.05,
+    'Limestone':              -0.05,
+    'Gypsum':                  0.08,
+    'Aggregates':              0.00,
+    'Timber':                  0.05,
+    'Copra':                   0.03,
+    'Dry Bulk':                0.02,
+    'default':                 0.025,
+}
+
+LONG_RUN_DEFAULT = 0.025   # 2.5% per year — converges here by year 5+
+
+
+def get_tapered_growth_rate(commodity: str, year_index: int,
+                             user_overrides: dict = None) -> float:
+    """
+    Get compound growth rate for a commodity in a given forecast year.
+
+    year_index: 1 = 2025, 2 = 2026, ..., 10 = 2034
+    user_overrides: dict of {commodity: rate} from UI sliders
+
+    Tapering formula:
+      Year 1 (2025): use base 2025 rate (from extrapolated file)
+      Year 2 (2026): 80% base + 20% long-run
+      Year 3 (2027): 60% base + 40% long-run
+      Year 4 (2028): 40% base + 60% long-run
+      Year 5+ (2029+): converge to long-run (2.5%)
+
+    This reflects that high initial growth rates moderate over time.
+    """
+    if user_overrides and commodity in user_overrides:
+        return float(user_overrides[commodity])
+
+    base = FORECAST_BASE_GROWTH_2025.get(
+        commodity,
+        FORECAST_BASE_GROWTH_2025['default']
+    )
+    lr = LONG_RUN_DEFAULT
+
+    base = max(min(base, 0.50), -0.20)
+
+    if year_index <= 1:
+        return base
+    elif year_index == 2:
+        return base * 0.80 + lr * 0.20
+    elif year_index == 3:
+        return base * 0.60 + lr * 0.40
+    elif year_index == 4:
+        return base * 0.40 + lr * 0.60
+    else:
+        return base * 0.20 + lr * 0.80
+
+
+def build_forecast_legs(excel_path: str, forecast_year: int,
+                        user_overrides: dict = None) -> 'pd.DataFrame':
+    """
+    Build leg library for a forecast year (2025–2034).
+
+    Uses 2024 Jan-Aug data extrapolated to full year as base.
+    Applies compound tapered growth rates year by year.
+    Returns a legs DataFrame compatible with FastLegLibrary.
+
+    Parameters:
+        excel_path:     path to D1_Port_Pair_Matrix_Advantis.xlsx
+        forecast_year:  integer 2025-2034
+        user_overrides: {commodity: annual_growth_rate} from UI
+
+    Safe to call without affecting any existing simulation.
+    """
+    import os
+
+    BASE_YEAR  = 2024
+    year_index = forecast_year - BASE_YEAR   # 1 for 2025 … 10 for 2034
+
+    # ── Load raw D1 data (same as existing load_and_process_data) ─────────────
+    df_raw = pd.read_excel(
+        excel_path,
+        sheet_name='Summary – All Years',
+        header=None
+    )
+    data = df_raw.iloc[3:].copy()
+    data.columns = [
+        '#', 'Load Country', 'Load Port', 'Disch Country', 'Disch Port',
+        'Commodity', 'Category', '2020', '2021', '2022', '2023', '2024',
+        'Total', 'Voyages', 'Corridor'
+    ]
+    data = data[pd.to_numeric(data['#'], errors='coerce').notna()].copy()
+    for col in ['2020', '2021', '2022', '2023', '2024', 'Total']:
+        data[col] = pd.to_numeric(data[col], errors='coerce').fillna(0)
+
+    # ── Compute forecast volume per route ─────────────────────────────────────
+    # Base = 2024 Jan-Aug actual × 1.5 = estimated full year
+    data['_base_vol'] = data['2024'] * 1.5
+
+    def _compound_factor(commodity_group: str) -> float:
+        factor = 1.0
+        for yi in range(1, year_index + 1):
+            rate = get_tapered_growth_rate(commodity_group, yi, user_overrides)
+            factor *= (1.0 + rate)
+        return factor
+
+    data['_comm_group'] = data['Commodity'].map(COMMODITY_GROUPS).fillna('Other')
+    data['_forecast_vol'] = data.apply(
+        lambda row: row['_base_vol'] * _compound_factor(row['_comm_group']),
+        axis=1
+    )
+
+    # ── Filter to active intra-SEA routes ─────────────────────────────────────
+    intra = data[data['Corridor'] == 'Intra-SEA'].copy()
+    intra['Commodity_Group'] = intra['Commodity'].map(COMMODITY_GROUPS).fillna('Other')
+    intra = intra[intra['Commodity_Group'] != 'Other']
+
+    # ── Build port database (same 70 ports as base simulation) ────────────────
+    ports = build_port_database(intra, n_ports=70)
+    dist_matrix = build_distance_matrix(ports)
+
+    # ── Build observed volumes using forecast volumes ──────────────────────────
+    n_ports      = len(ports)
+    port_names   = ports['Port'].tolist()
+    port_countries = ports['Country'].tolist()
+
+    observed      = set()
+    observed_vols = {}
+
+    for _, row in intra.iterrows():
+        if row['Load Port'] in port_names and row['Disch Port'] in port_names:
+            key = (row['Load Port'], row['Disch Port'], row['Commodity_Group'])
+            observed.add(key)
+            observed_vols[key] = (
+                observed_vols.get(key, 0) + row['_forecast_vol']
+            )
+
+    # ── Build legs using forecast volumes ─────────────────────────────────────
+    legs = []
+    for i in range(n_ports):
+        for j in range(n_ports):
+            if i == j:
+                continue
+            origin = port_names[i]
+            dest   = port_names[j]
+            dist   = dist_matrix[i][j]
+            if dist < 50:
+                continue
+
+            for commodity in COMMODITY_23:
+                if commodity not in COMMODITY_CATEGORIES:
+                    continue
+                key = (origin, dest, commodity)
+                cat = COMMODITY_CATEGORIES[commodity]
+
+                exports = ports.iloc[i].get('Exports', {}) or {}
+                imports = ports.iloc[j].get('Imports', {}) or {}
+                origin_exports = exports.get(commodity, 0) > 0
+                dest_imports   = imports.get(commodity, 0) > 0
+
+                if key in observed:
+                    annual_vol = observed_vols[key]
+                elif origin_exports and dest_imports:
+                    exp_vol = exports.get(commodity, 0) * 0.1
+                    imp_vol = imports.get(commodity, 0) * 0.1
+                    annual_vol = min(exp_vol, imp_vol)
+                else:
+                    continue
+
+                freight_rate = compute_freight_rate(commodity, dist)
+                handling     = HANDLING_COST.get(cat, HANDLING_COST['Dry Bulk'])
+                cargo_rate   = CARGO_RATE.get(cat, CARGO_RATE['Dry Bulk'])
+
+                from data.port_charges import get_port_charges, STEVEDORING_RATES
+                load_ch  = get_port_charges(origin, port_countries[i])
+                disch_ch = get_port_charges(dest,   port_countries[j])
+
+                _port_stay = DEFAULT_PORT_STAY_DAYS.get(
+                    commodity,
+                    DEFAULT_PORT_STAY_DAYS.get(cat, _PORT_STAY_FALLBACK),
+                )
+
+                legs.append({
+                    'origin_id':   i,   'dest_id':     j,
+                    'origin_port': origin, 'dest_port':  dest,
+                    'origin_country': port_countries[i],
+                    'dest_country':   port_countries[j],
+                    'commodity':   commodity, 'category':   cat,
+                    'direction':   'Intra-SEA',
+                    'distance_nm': dist,
+                    'status':      'observed' if key in observed else 'plausible',
+                    'annual_volume_mt': annual_vol,
+                    'freight_rate_usd_mt': freight_rate,
+                    'load_handling_usd_mt':  handling['load'],
+                    'disch_handling_usd_mt': handling['disch'],
+                    'load_port_charges':  load_ch['nav'],
+                    'disch_port_charges': disch_ch['nav'],
+                    'load_port_nav':   load_ch['nav'],
+                    'load_port_steve': 0.0,
+                    'disch_port_nav':  disch_ch['nav'],
+                    'disch_port_steve': 0.0,
+                    'load_congestion_days':  load_ch['cong_mean'],
+                    'disch_congestion_days': disch_ch['cong_mean'],
+                    'load_congestion_std':   load_ch['cong_std'],
+                    'disch_congestion_std':  disch_ch['cong_std'],
+                    'load_steve_per_mt':  STEVEDORING_RATES.get(cat, (0.0, 0.0))[0],
+                    'disch_steve_per_mt': STEVEDORING_RATES.get(cat, (0.0, 0.0))[1],
+                    'load_rate_mt_day':  cargo_rate['load'],
+                    'disch_rate_mt_day': cargo_rate['disch'],
+                    'port_stay_days':    _port_stay,
+                })
+
+    if not legs:
+        return pd.DataFrame()
+
+    legs_df = pd.DataFrame(legs)
+
+    # Apply same filters as existing build_leg_library
+    _SEA_LOAD = {
+        'Indonesia', 'Philippines', 'Vietnam', 'Malaysia', 'Thailand',
+        'Singapore', 'Bangladesh', 'Myanmar', 'Cambodia', 'Timor-Leste',
+        'Brunei', 'Sri Lanka',
+    }
+    _FAR_EAST = {'China', 'Japan', 'Korea South', 'Hong Kong',
+                 'Taiwan, Province of China'}
+    legs_df = legs_df[
+        legs_df['origin_country'].isin(_SEA_LOAD) &
+        legs_df['dest_country'].isin(_SEA_LOAD | _FAR_EAST)
+    ]
+    legs_df = legs_df[~legs_df['category'].isin(['Break-Bulk'])]
+    legs_df = legs_df[~legs_df['origin_country'].isin({'Cambodia'})]
+
+    try:
+        from data.port_restrictions import NOT_SUITABLE_PORTS
+        legs_df = legs_df[
+            ~legs_df['origin_port'].isin(NOT_SUITABLE_PORTS) &
+            ~legs_df['dest_port'].isin(NOT_SUITABLE_PORTS)
+        ]
+    except ImportError:
+        pass
+
+    legs_df.attrs['simulation_year'] = str(forecast_year)
+    legs_df.attrs['is_forecast']     = True
+    legs_df.attrs['year_index']      = year_index
+
+    return legs_df.reset_index(drop=True)

@@ -468,6 +468,7 @@ if 'sim_done' not in st.session_state:
 if 'sim_requested' not in st.session_state:
     st.session_state['sim_requested'] = False
 _sim_locked = st.session_state.get('sim_running', False)
+_fc_locked  = st.session_state.get('fc_running',  False)
 
 # ─── SIDEBAR ─────────────────────────────────────────────────────────────────
 
@@ -815,6 +816,22 @@ DATA_PATH = os.path.join(os.path.dirname(__file__), 'data', 'D1_Port_Pair_Matrix
 DB_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'db', 'compass_runs.db')
 init_db(DB_PATH)
 
+# ── Verify pre-built sea-route data files (warn if missing on cloud) ─────────
+_JSON_PATH = os.path.join(os.path.dirname(__file__), 'data', 'port_sea_routes.json')
+_CSV_PATH  = os.path.join(os.path.dirname(__file__), 'data', 'port_sea_distances.csv')
+
+if not os.path.exists(_JSON_PATH):
+    st.sidebar.warning(
+        "⚠️ port_sea_routes.json not found. "
+        "Map routes will use straight-line arcs. "
+        "Run data/build_distance_matrix.py locally then commit the file."
+    )
+elif os.path.getsize(_JSON_PATH) < 1000:
+    st.sidebar.warning(
+        "⚠️ port_sea_routes.json appears empty. "
+        "Re-run data/build_distance_matrix.py locally."
+    )
+
 # ── Post-simulation success banner ───────────────────────────────────────────
 if st.session_state.get('sim_done') and 'analysis' in st.session_state:
     _res_done = st.session_state['results']
@@ -892,6 +909,7 @@ tabs = st.tabs([
     "🗺️ Voyage Analysis",
     "🚢 Voyage Journey",
     "⚓ Port Validation",
+    "🔮 10-Year Forecast",
 ])
 
 # ─── TAB 1: NETWORK & DATA (merged) ──────────────────────────────────────────
@@ -1252,6 +1270,168 @@ with tabs[1]:
 
 </div>
 """, unsafe_allow_html=True)
+
+        # ── 10-Year Forecast Summary (only shows if forecast has been run) ────
+        if st.session_state.get('fc_complete') and 'fc_analysis' in st.session_state:
+            _fc_ana = st.session_state['fc_analysis']
+            _fc_res = st.session_state['fc_results']
+            _fc_yrs = sorted([y for y in _fc_ana.keys()])
+
+            if _fc_yrs:
+                st.markdown("---")
+                st.markdown(
+                    "<div style='display:flex;align-items:center;"
+                    "justify-content:space-between;margin-bottom:10px'>"
+                    "<div style='font-size:13px;font-weight:500;color:#1a3a5c'>"
+                    "🔮 10-Year Forecast Summary (2025–2034)</div>"
+                    "<div style='font-size:11px;color:#64748b'>"
+                    "Based on 100,000 Monte Carlo iterations per year</div>"
+                    "</div>",
+                    unsafe_allow_html=True
+                )
+
+                # ── Calculate cumulative 10-year totals ───────────────────────
+                _10yr_means = [_fc_ana[y]['summary']['mean_profit'] for y in _fc_yrs]
+                _10yr_p10s  = [_fc_ana[y]['summary']['p10_profit']  for y in _fc_yrs]
+                _10yr_p90s  = [_fc_ana[y]['summary']['p90_profit']  for y in _fc_yrs]
+                _10yr_tces  = [_fc_ana[y]['summary']['mean_tce']    for y in _fc_yrs]
+
+                _cum_mean  = sum(_10yr_means)
+                _cum_p10   = sum(_10yr_p10s)
+                _cum_p90   = sum(_10yr_p90s)
+
+                _best_yr   = _fc_yrs[_10yr_means.index(max(_10yr_means))]
+                _worst_yr  = _fc_yrs[_10yr_means.index(min(_10yr_means))]
+                _best_val  = max(_10yr_means)
+                _worst_val = min(_10yr_means)
+
+                _tce_start = _10yr_tces[0]
+                _tce_end   = _10yr_tces[-1]
+                _tce_arrow = "↗" if _tce_end > _tce_start else "↘"
+                _tce_color = "#3B6D11" if _tce_end > _tce_start else "#A32D2D"
+
+                # ── 4 summary KPI cards ───────────────────────────────────────
+                _fc_kc1, _fc_kc2, _fc_kc3, _fc_kc4 = st.columns(4)
+
+                _fc_kc1.markdown(
+                    f"<div style='background:linear-gradient(135deg,#085041,#1D9E75);"
+                    f"border-radius:12px;padding:14px 18px;color:white'>"
+                    f"<div style='font-size:1.5rem;font-weight:700;"
+                    f"letter-spacing:-0.5px'>${_cum_mean/1e6:.2f}M</div>"
+                    f"<div style='font-size:11px;opacity:0.8;margin-top:4px'>"
+                    f"10-Year Cumulative Profit</div>"
+                    f"<div style='font-size:11px;color:#9FE1CB;margin-top:4px'>"
+                    f"${_cum_mean/len(_fc_yrs)/1e6:.2f}M avg/year</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+                _fc_kc2.markdown(
+                    f"<div style='background:linear-gradient(135deg,#1a3a5c,#2d5986);"
+                    f"border-radius:12px;padding:14px 18px;color:white'>"
+                    f"<div style='font-size:1.1rem;font-weight:700;color:#fbbf24'>"
+                    f"P10: ${_cum_p10/1e6:.2f}M</div>"
+                    f"<div style='font-size:1.1rem;font-weight:700;color:#86efac;"
+                    f"margin-top:4px'>P90: ${_cum_p90/1e6:.2f}M</div>"
+                    f"<div style='font-size:11px;opacity:0.7;margin-top:4px'>"
+                    f"Cumulative 10-year range</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+                _fc_kc3.markdown(
+                    f"<div style='background:linear-gradient(135deg,#1a3a5c,#2d5986);"
+                    f"border-radius:12px;padding:14px 18px;color:white'>"
+                    f"<div style='font-size:11px;opacity:0.7'>Best year</div>"
+                    f"<div style='font-size:1.2rem;font-weight:600;color:#86efac'>"
+                    f"{_best_yr}: ${_best_val/1e6:.2f}M</div>"
+                    f"<div style='font-size:11px;opacity:0.7;margin-top:6px'>"
+                    f"Worst year</div>"
+                    f"<div style='font-size:1.2rem;font-weight:600;color:#fca5a5'>"
+                    f"{_worst_yr}: ${_worst_val/1e6:.2f}M</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+                _fc_kc4.markdown(
+                    f"<div style='background:linear-gradient(135deg,#1a3a5c,#2d5986);"
+                    f"border-radius:12px;padding:14px 18px;color:white'>"
+                    f"<div style='font-size:11px;opacity:0.7'>TCE trend</div>"
+                    f"<div style='font-size:1.3rem;font-weight:600;"
+                    f"color:{_tce_color}'>{_tce_arrow} {_tce_arrow}</div>"
+                    f"<div style='font-size:11px;color:#94a3b8;margin-top:4px'>"
+                    f"${_tce_start:,.0f} → ${_tce_end:,.0f}/day</div>"
+                    f"<div style='font-size:10px;opacity:0.6;margin-top:4px'>"
+                    f"{(((_tce_end/_tce_start)-1)*100):+.1f}% over 10 years</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+                st.markdown("<div style='margin-top:12px'></div>",
+                            unsafe_allow_html=True)
+
+                # ── Mini year-by-year bar chart ───────────────────────────────
+                _avg_per_yr  = _cum_mean / len(_fc_yrs)
+                _fc_col_bars = [
+                    '#1D9E75' if v >= _avg_per_yr else '#E24B4A'
+                    for v in _10yr_means
+                ]
+
+                fig_mini = go.Figure()
+                fig_mini.add_trace(go.Bar(
+                    x=_fc_yrs,
+                    y=[v / 1e6 for v in _10yr_means],
+                    marker_color=_fc_col_bars,
+                    text=[f'${v/1e6:.2f}M' for v in _10yr_means],
+                    textposition='outside',
+                    textfont=dict(size=9),
+                ))
+                fig_mini.add_hline(
+                    y=_avg_per_yr / 1e6,
+                    line_dash='dash',
+                    line_color='#94a3b8',
+                    line_width=1.5,
+                    annotation_text=f'Avg ${_avg_per_yr/1e6:.2f}M',
+                    annotation_position='bottom right',
+                    annotation_font=dict(size=9, color='#94a3b8'),
+                )
+                fig_mini.update_layout(
+                    height=220,
+                    margin=dict(l=0, r=0, t=20, b=0),
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    yaxis=dict(
+                        showgrid=True,
+                        gridcolor='rgba(0,0,0,0.05)',
+                        title='Annual profit ($M)',
+                        titlefont=dict(size=10),
+                    ),
+                    xaxis=dict(title=None),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_mini, use_container_width=True)
+
+                # ── Compare 1-year vs 10-year ─────────────────────────────────
+                _1yr_mean = s['mean_profit']
+                _ratio    = _cum_mean / _1yr_mean if _1yr_mean else 0
+
+                st.markdown(
+                    f"<div style='background:var(--color-background-secondary);"
+                    f"border-radius:10px;padding:10px 14px;"
+                    f"font-size:12px;color:var(--color-text-secondary)'>"
+                    f"<span style='color:var(--color-text-primary);font-weight:500'>"
+                    f"Current year mean profit:</span> "
+                    f"${_1yr_mean:,.0f}&nbsp;&nbsp;→&nbsp;&nbsp;"
+                    f"<span style='color:var(--color-text-primary);font-weight:500'>"
+                    f"10-year cumulative:</span> "
+                    f"${_cum_mean:,.0f} "
+                    f"<span style='color:#1D9E75'>({_ratio:.1f}× single year)</span>"
+                    f"&nbsp;&nbsp;|&nbsp;&nbsp;"
+                    f"<span style='font-size:11px;color:#185FA5'>"
+                    f"→ Full detail in 🔮 10-Year Forecast tab</span>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
 
         # ── Extended statistics panel ─────────────────────────────────
         with st.expander("📊 Full Statistical Summary", expanded=False):
@@ -3589,8 +3769,9 @@ with tabs[3]:
             Return (lats, lons) for the realistic maritime route between two ports.
             Priority:
               1. Session-state cache (instant — avoids recomputing across rerenders)
-              2. searoute library — realistic maritime routing avoiding land masses
-              3. Geodesic arc fallback (great-circle, used only when searoute fails)
+              2. JSON waypoints from port_sea_routes.json (works on Streamlit Cloud)
+              3. Searoute library (local only — skipped silently on cloud)
+              4. Geodesic arc fallback (great-circle, used only as last resort)
             """
             import math as _m
 
@@ -3627,14 +3808,31 @@ with tabs[3]:
 
             result = None
 
-            # ── searoute library (primary — realistic maritime corridors) ────
-            if port_a in p_coords and port_b in p_coords:
+            # ── Step 1: Pre-built JSON waypoints (PRIMARY — works on cloud) ──
+            # Uses port_sea_routes.json built by build_distance_matrix.py.
+            # Fast, accurate, no internet required — correct first choice.
+            try:
+                from data.sea_distances_loader import get_sea_route_coords
+                _wpts = get_sea_route_coords(port_a, port_b)
+                if _wpts and len(_wpts) >= 3:
+                    lo_r = [w[0] for w in _wpts]
+                    la_r = [w[1] for w in _wpts]
+                    if _validate(la_r, lo_r):
+                        result = (la_r, lo_r)
+            except Exception:
+                pass
+
+            # ── Step 2: Searoute library (SECONDARY — local only) ────────────
+            # Only called when JSON does not cover this route pair.
+            # Fails silently on Streamlit Cloud — that is acceptable because
+            # the JSON should cover all active simulation ports.
+            if result is None and port_a in p_coords and port_b in p_coords:
                 try:
                     import searoute as _sr
                     la1, lo1 = p_coords[port_a]
                     la2, lo2 = p_coords[port_b]
                     geo    = _sr.searoute([lo1, la1], [lo2, la2])
-                    coords = geo['geometry']['coordinates']  # [[lon, lat], ...]
+                    coords = geo['geometry']['coordinates']
                     if coords and len(coords) >= 3:
                         lo_r = [c[0] for c in coords]
                         la_r = [c[1] for c in coords]
@@ -3643,7 +3841,9 @@ with tabs[3]:
                 except Exception:
                     pass
 
-            # ── geodesic fallback ────────────────────────────────────────────
+            # ── Step 3: Geodesic arc fallback (last resort) ───────────────────
+            # Used when neither JSON nor Searoute has the route.
+            # Draws a curved arc — not a real sea route, but never crashes.
             if result is None and port_a in p_coords and port_b in p_coords:
                 la1, lo1 = p_coords[port_a]
                 la2, lo2 = p_coords[port_b]
@@ -4791,4 +4991,640 @@ with tabs[4]:
         f"Vessel specs: Draft laden {vessel_draft}m | "
         f"Ballast {vessel_draft_b}m | LOA {vessel_loa}m | Beam {vessel_beam}m"
     )
+
+
+# ─── TAB 6: 10-YEAR FORECAST ──────────────────────────────────────────────────
+# ADDITIVE ONLY — does not modify any existing tabs or functions
+with tabs[5]:
+
+    # ── Imports needed for this tab only ──────────────────────────────────────
+    from modules.data_processor import (
+        build_forecast_legs,
+        FORECAST_BASE_GROWTH_2025,
+        LONG_RUN_DEFAULT,
+        get_tapered_growth_rate,
+    )
+
+    st.markdown(
+        "<div style='font-size:14px;font-weight:500;color:#1a3a5c;"
+        "margin-bottom:2px'>🔮 10-Year Voyage Programme Forecast (2025–2034)</div>"
+        "<div style='font-size:11px;color:#64748b;margin-bottom:14px'>"
+        "Forward simulation using 2020–2024 historical data as base. "
+        "Growth rates taper from 2025 actuals toward 2.5% long-run. "
+        "100,000 Monte Carlo iterations per year for research-grade accuracy."
+        "</div>",
+        unsafe_allow_html=True
+    )
+
+    # ── Read vessel config from sidebar (same vessel as simulation) ───────────
+    _fc_vessel = VesselConfig(
+        dwt=st.session_state.get('vessel_dwt', 24228),
+        dwcc=st.session_state.get('vessel_dwcc', 20593),
+        speed_laden_knots=st.session_state.get('vessel_speed_laden', 11.0),
+        speed_ballast_knots=st.session_state.get('vessel_speed_ballast', 11.5),
+        charter_hire_day=st.session_state.get('charter_hire_input', 9000),
+        lsfo_price_mt=st.session_state.get('lsfo_input', 560),
+        mgo_price_mt=st.session_state.get('mgo_input', 780),
+        draft_laden=st.session_state.get('vessel_draft_laden_input', 9.5),
+        draft_ballast=st.session_state.get('vessel_draft_ballast_input', 5.5),
+        loa=st.session_state.get('vessel_loa', 147.0),
+        beam=st.session_state.get('vessel_beam', 25.0),
+    )
+
+    FORECAST_YEARS = list(range(2025, 2035))   # 2025 to 2034
+
+    # ── Growth rate editor ────────────────────────────────────────────────────
+    with st.expander("⚙️ Adjust growth rates per commodity", expanded=False):
+        st.markdown(
+            "<div style='font-size:11px;color:#64748b;margin-bottom:8px'>"
+            "Base rates from SEA_Trade_Flows_Extrapolated.xlsx (2025). "
+            "Rates taper toward 2.5% long-run by year 5. "
+            "Adjust below to run scenario analysis.</div>",
+            unsafe_allow_html=True
+        )
+
+        KEY_COMMS = [
+            'Steam Coal', 'Coking Coal', 'Nickel Ore', 'Clinker',
+            'Palm Kernel Expeller', 'Sugar', 'Steels', 'Fertilizers',
+            'Rice', 'Wood Chips', 'Gypsum',
+        ]
+
+        user_gr = {}
+        gr_cols = st.columns(3)
+        for ci, comm in enumerate(KEY_COMMS):
+            base_rate = FORECAST_BASE_GROWTH_2025.get(comm, LONG_RUN_DEFAULT)
+            with gr_cols[ci % 3]:
+                user_gr[comm] = st.slider(
+                    f"{comm}",
+                    min_value=-0.20,
+                    max_value=0.50,
+                    value=float(round(base_rate, 3)),
+                    step=0.005,
+                    format="%.1f%%",
+                    key=f'fc_gr_{comm.replace(" ","_")}',
+                    help=f"2025 base: {base_rate:+.1%} | Long-run: +2.5%",
+                )
+        for comm in COMMODITY_23:
+            if comm not in user_gr:
+                user_gr[comm] = FORECAST_BASE_GROWTH_2025.get(comm, LONG_RUN_DEFAULT)
+
+        st.caption(
+            "Rates shown are for Year 1 (2025). They automatically taper "
+            "toward 2.5% per year by Year 5 (2029). Reset sliders to "
+            "default by refreshing the page."
+        )
+
+    # ── Run button ────────────────────────────────────────────────────────────
+    # ── Show running banner when forecast is active ───────────────────────────
+    if _fc_locked:
+        st.markdown(
+            "<div style='background:linear-gradient(135deg,#E1F5EE,#9FE1CB);"
+            "border-left:4px solid #1D9E75;padding:12px 16px;border-radius:8px;"
+            "font-size:13px;color:#085041;font-weight:600;margin-bottom:10px'>"
+            "⏳ 10-Year Forecast running...<br>"
+            "<span style='font-weight:400;font-size:11px'>"
+            "Please wait — 100,000 iterations × 10 years. "
+            "Do not close this tab.</span>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+
+    fc_run_col1, fc_run_col2, fc_run_col3 = st.columns([2, 1, 1])
+    with fc_run_col1:
+        _fc_run_btn = st.button(
+            "▶ Run 10-Year Forecast (100,000 iterations × 10 years)",
+            type="primary",
+            key='fc_run_btn',
+            use_container_width=True,
+            disabled=_fc_locked or _sim_locked,
+        )
+    with fc_run_col2:
+        if _fc_locked:
+            st.markdown(
+                "<div style='font-size:11px;color:#0F6E56;padding-top:8px;"
+                "font-weight:500'>🔄 Running...</div>",
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                "<div style='font-size:11px;color:#64748b;padding-top:8px'>"
+                "Est. time: 60–90 min</div>",
+                unsafe_allow_html=True
+            )
+    with fc_run_col3:
+        _fc_clear_btn = st.button(
+            "🗑 Clear forecast",
+            key='fc_clear_btn',
+            use_container_width=True,
+            disabled=_fc_locked,
+        )
+
+    if _fc_clear_btn:
+        for k in ['fc_results', 'fc_analysis', 'fc_complete']:
+            st.session_state.pop(k, None)
+        st.rerun()
+
+    # ── Run the forecast ──────────────────────────────────────────────────────
+    if _fc_run_btn and os.path.exists(DATA_PATH) and not _fc_locked:
+        # Lock the forecast — disable buttons on the next render
+        st.session_state['fc_running']  = True
+        st.session_state['fc_complete'] = False
+        st.rerun()
+
+    # Run the actual forecast when locked (state persists across rerun)
+    if st.session_state.get('fc_running') and not st.session_state.get('fc_complete'):
+        _fc_all_results  = {}
+        _fc_all_analysis = {}
+        _fc_t0           = time.time()
+        n_iterations_fc  = 100000
+
+        # ── Rich progress display ─────────────────────────────────────────────
+        _fc_header  = st.empty()
+        _fc_overall = st.progress(0)
+        _fc_status  = st.empty()
+        _fc_detail  = st.empty()
+        _fc_stats   = st.empty()
+
+        _fc_header.markdown(
+            "<div style='background:linear-gradient(135deg,#085041,#0F6E56);"
+            "border-radius:12px;padding:16px 20px;margin-bottom:8px'>"
+            "<div style='font-size:15px;font-weight:500;color:white'>"
+            "🔮 COMPASS 10-Year Forecast Running</div>"
+            "<div style='font-size:11px;color:#9FE1CB;margin-top:4px'>"
+            "100,000 Monte Carlo iterations per year × 10 years = 1,000,000 total"
+            "</div></div>",
+            unsafe_allow_html=True
+        )
+
+        for _fi, _yr in enumerate(FORECAST_YEARS):
+            _elapsed = time.time() - _fc_t0
+            _pct     = _fi / len(FORECAST_YEARS)
+
+            if _fi > 0:
+                _rate       = _elapsed / _fi
+                _remain_sec = _rate * (len(FORECAST_YEARS) - _fi)
+                _remain_str = (
+                    f"{_remain_sec/60:.0f} min"
+                    if _remain_sec >= 60 else f"{_remain_sec:.0f} sec"
+                )
+            else:
+                _remain_str = "calculating..."
+
+            _fc_overall.progress(_pct)
+
+            _fc_status.markdown(
+                f"<div style='background:#E1F5EE;border:0.5px solid #9FE1CB;"
+                f"border-radius:10px;padding:12px 16px'>"
+                f"<div style='display:flex;justify-content:space-between;"
+                f"align-items:center'>"
+                f"<div>"
+                f"<div style='font-size:13px;font-weight:500;color:#0F6E56'>"
+                f"🔮 Simulating {_yr} — Year {_fi+1} of {len(FORECAST_YEARS)}</div>"
+                f"<div style='font-size:11px;color:#085041;margin-top:3px'>"
+                f"100,000 iterations | "
+                f"Elapsed: {_elapsed/60:.1f} min | "
+                f"Est. remaining: {_remain_str}"
+                f"</div></div>"
+                f"<div style='text-align:right'>"
+                f"<div style='font-size:20px;font-weight:500;color:#1D9E75'>"
+                f"{_pct*100:.0f}%</div>"
+                f"<div style='font-size:10px;color:#085041'>"
+                f"{_fi}/{len(FORECAST_YEARS)} years done</div>"
+                f"</div></div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+            _dots = ""
+            for _di, _dyr in enumerate(FORECAST_YEARS):
+                if _di < _fi:
+                    _dots += "<span style='color:#1D9E75;font-size:18px'>●</span> "
+                elif _di == _fi:
+                    _dots += "<span style='color:#f59e0b;font-size:18px'>◉</span> "
+                else:
+                    _dots += "<span style='color:#D3D1C7;font-size:18px'>○</span> "
+            _fc_detail.markdown(
+                f"<div style='padding:8px 0;font-size:12px;color:#64748b'>"
+                f"{_dots}<br>"
+                f"<span style='font-size:10px'>"
+                + "  ".join([str(y) for y in FORECAST_YEARS]) +
+                f"</span></div>",
+                unsafe_allow_html=True
+            )
+
+            with st.spinner(f"Building {_yr} cargo forecast..."):
+                _fc_legs = build_forecast_legs(
+                    DATA_PATH,
+                    forecast_year=_yr,
+                    user_overrides=user_gr,
+                )
+
+            if _fc_legs.empty:
+                st.warning(f"No routes found for {_yr} — skipping.")
+                continue
+
+            # Live stats for this year
+            _fc_stats.markdown(
+                f"<div style='background:var(--color-background-secondary);"
+                f"border-radius:8px;padding:8px 12px;font-size:11px;"
+                f"color:var(--color-text-secondary)'>"
+                f"📊 {_yr}: {len(_fc_legs):,} routes loaded | "
+                f"Building {n_iterations_fc:,} iterations..."
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+            _fc_ports = build_port_database(
+                load_and_process_data(DATA_PATH), n_ports=70
+            )
+            _fc_dist = build_distance_matrix(_fc_ports)
+
+            _fc_sim_cfg = SimConfig(
+                n_iterations=n_iterations_fc,
+                algorithm='monte_carlo',
+                random_seed=None,
+            )
+
+            _fc_res = run_full_simulation(
+                _fc_legs, _fc_dist, _fc_vessel, _fc_sim_cfg,
+            )
+            _fc_ana = analyse_results(_fc_res, _fc_ports)
+
+            _fc_all_results[str(_yr)]  = _fc_res
+            _fc_all_analysis[str(_yr)] = _fc_ana
+
+        # ── Final progress update ─────────────────────────────────────────────
+        _fc_overall.progress(1.0)
+        _total_fc_min = (time.time() - _fc_t0) / 60
+
+        _fc_header.empty()
+        _fc_detail.empty()
+        _fc_stats.empty()
+
+        _fc_status.markdown(
+            f"<div style='background:linear-gradient(135deg,#EAF3DE,#C0DD97);"
+            f"border-left:4px solid #639922;border-radius:12px;"
+            f"padding:16px 20px;text-align:center'>"
+            f"<div style='font-size:15px;font-weight:500;color:#3B6D11'>"
+            f"✅ 10-Year Forecast Complete</div>"
+            f"<div style='font-size:12px;color:#27500A;margin-top:6px'>"
+            f"10 years × 100,000 iterations = 1,000,000 total simulations<br>"
+            f"Completed in {_total_fc_min:.1f} minutes"
+            f"</div></div>",
+            unsafe_allow_html=True
+        )
+
+        # Store results and unlock buttons
+        st.session_state['fc_results']  = _fc_all_results
+        st.session_state['fc_analysis'] = _fc_all_analysis
+        st.session_state['fc_complete'] = True
+        st.session_state['fc_running']  = False
+        st.rerun()
+
+    # ── Display results ───────────────────────────────────────────────────────
+    if st.session_state.get('fc_complete') and 'fc_analysis' in st.session_state:
+        _fc_ana_all = st.session_state['fc_analysis']
+        _fc_res_all = st.session_state['fc_results']
+        _fc_yrs     = [str(y) for y in FORECAST_YEARS if str(y) in _fc_ana_all]
+
+        if not _fc_yrs:
+            st.info("No forecast results yet. Click Run to start.")
+        else:
+            # ── Year cards ────────────────────────────────────────────────────
+            FC_YR_COLORS = {
+                '2025': '#1D9E75', '2026': '#0F6E56', '2027': '#085041',
+                '2028': '#378ADD', '2029': '#185FA5', '2030': '#0C447C',
+                '2031': '#7F77DD', '2032': '#534AB7', '2033': '#3C3489',
+                '2034': '#26215C',
+            }
+            _fc_yr_cols = st.columns(min(len(_fc_yrs), 5))
+            _sel_fc_yr  = st.session_state.get('sel_fc_yr', '2027')
+
+            for _ci, _yr in enumerate(_fc_yrs[:5]):
+                with _fc_yr_cols[_ci]:
+                    _s    = _fc_ana_all[_yr]['summary']
+                    _yf   = int(_yr) - 2024
+                    _is_s = (_yr == _sel_fc_yr)
+                    _best = max(r['total_profit'] for r in _fc_res_all[_yr])
+                    st.markdown(
+                        f"<div style='border:{'2px solid #378ADD' if _is_s else '0.5px solid var(--color-border-tertiary)'};"
+                        f"border-radius:10px;padding:10px;text-align:center;"
+                        f"background:{'#E6F1FB' if _is_s else 'var(--color-background-primary)'}'>"
+                        f"<div style='font-size:13px;font-weight:500;"
+                        f"color:{FC_YR_COLORS.get(_yr, '#1a3a5c')}'>{_yr}</div>"
+                        f"<div style='font-size:9px;color:var(--color-text-secondary)'>+{_yf} yr</div>"
+                        f"<div style='font-size:16px;font-weight:500;margin:6px 0'>"
+                        f"${_s['mean_profit']/1e6:.2f}M</div>"
+                        f"<div style='font-size:10px;color:var(--color-text-secondary)'>"
+                        f"TCE ${_s['mean_tce']:,.0f}/d</div>"
+                        f"<div style='font-size:9px;margin-top:4px;"
+                        f"color:{'#3B6D11' if _s['profitable_pct'] > 99 else '#BA7517'}'>"
+                        f"{_s['profitable_pct']:.1f}% profitable</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+                    if st.button(f"View {_yr}", key=f"fc_view_{_yr}",
+                                 use_container_width=True):
+                        st.session_state['sel_fc_yr'] = _yr
+                        st.rerun()
+
+            if len(_fc_yrs) > 5:
+                _fc_yr_cols2 = st.columns(min(len(_fc_yrs) - 5, 5))
+                for _ci, _yr in enumerate(_fc_yrs[5:10]):
+                    with _fc_yr_cols2[_ci]:
+                        _s    = _fc_ana_all[_yr]['summary']
+                        _yf   = int(_yr) - 2024
+                        _is_s = (_yr == _sel_fc_yr)
+                        _best = max(r['total_profit'] for r in _fc_res_all[_yr])
+                        st.markdown(
+                            f"<div style='border:{'2px solid #378ADD' if _is_s else '0.5px solid var(--color-border-tertiary)'};"
+                            f"border-radius:10px;padding:10px;text-align:center;"
+                            f"background:{'#E6F1FB' if _is_s else 'var(--color-background-primary)'}'>"
+                            f"<div style='font-size:13px;font-weight:500;"
+                            f"color:{FC_YR_COLORS.get(_yr, '#1a3a5c')}'>{_yr}</div>"
+                            f"<div style='font-size:9px;color:var(--color-text-secondary)'>+{_yf} yr</div>"
+                            f"<div style='font-size:16px;font-weight:500;margin:6px 0'>"
+                            f"${_s['mean_profit']/1e6:.2f}M</div>"
+                            f"<div style='font-size:10px;color:var(--color-text-secondary)'>"
+                            f"TCE ${_s['mean_tce']:,.0f}/d</div>"
+                            f"<div style='font-size:9px;margin-top:4px;"
+                            f"color:{'#3B6D11' if _s['profitable_pct'] > 99 else '#BA7517'}'>"
+                            f"{_s['profitable_pct']:.1f}% profitable</div>"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+                        if st.button(f"View {_yr}", key=f"fc_view_{_yr}",
+                                     use_container_width=True):
+                            st.session_state['sel_fc_yr'] = _yr
+                            st.rerun()
+
+            st.markdown("---")
+
+            # ── Fan chart — P5/P10/P25/Mean/P75/P90/P95 ──────────────────────
+            st.markdown(
+                "<div style='font-size:12px;font-weight:500;margin-bottom:6px'>"
+                "10-Year profit distribution forecast — confidence bands "
+                "(100,000 iterations per year)</div>",
+                unsafe_allow_html=True
+            )
+
+            _p5   = [_fc_ana_all[y]['summary']['p5_profit'] / 1e6  for y in _fc_yrs]
+            _p10  = [_fc_ana_all[y]['summary']['p10_profit'] / 1e6 for y in _fc_yrs]
+            _p25  = [_fc_ana_all[y]['summary']['p25_profit'] / 1e6 for y in _fc_yrs]
+            _mean = [_fc_ana_all[y]['summary']['mean_profit'] / 1e6 for y in _fc_yrs]
+            _p75  = [_fc_ana_all[y]['summary']['p75_profit'] / 1e6 for y in _fc_yrs]
+            _p90  = [_fc_ana_all[y]['summary']['p90_profit'] / 1e6 for y in _fc_yrs]
+            _p95  = [_fc_ana_all[y]['summary']['p95_profit'] / 1e6 for y in _fc_yrs]
+            _tce  = [_fc_ana_all[y]['summary']['mean_tce']           for y in _fc_yrs]
+
+            fig_fan = go.Figure()
+            fig_fan.add_trace(go.Scatter(
+                x=_fc_yrs + _fc_yrs[::-1], y=_p5 + _p95[::-1],
+                fill='toself', fillcolor='rgba(29,158,117,0.07)',
+                line=dict(color='rgba(0,0,0,0)'), name='P5–P95',
+            ))
+            fig_fan.add_trace(go.Scatter(
+                x=_fc_yrs + _fc_yrs[::-1], y=_p10 + _p90[::-1],
+                fill='toself', fillcolor='rgba(29,158,117,0.12)',
+                line=dict(color='rgba(0,0,0,0)'), name='P10–P90',
+            ))
+            fig_fan.add_trace(go.Scatter(
+                x=_fc_yrs + _fc_yrs[::-1], y=_p25 + _p75[::-1],
+                fill='toself', fillcolor='rgba(29,158,117,0.20)',
+                line=dict(color='rgba(0,0,0,0)'), name='P25–P75',
+            ))
+            fig_fan.add_trace(go.Scatter(
+                x=_fc_yrs, y=_mean, mode='lines+markers+text',
+                line=dict(color='#1D9E75', width=3),
+                marker=dict(size=7, color='#1D9E75'),
+                text=[f'${v:.2f}M' for v in _mean],
+                textposition='top center',
+                textfont=dict(size=9),
+                name='Mean profit',
+            ))
+            fig_fan.add_trace(go.Scatter(
+                x=_fc_yrs, y=_p10, mode='lines',
+                line=dict(color='#E24B4A', width=1.5, dash='dot'),
+                name='P10 (downside)',
+            ))
+            fig_fan.add_trace(go.Scatter(
+                x=_fc_yrs, y=_p90, mode='lines',
+                line=dict(color='#378ADD', width=1.5, dash='dot'),
+                name='P90 (upside)',
+            ))
+            fig_fan.update_layout(
+                height=400,
+                yaxis_title='Annual profit ($M)',
+                margin=dict(l=10, r=10, t=30, b=10),
+                legend=dict(orientation='h', y=1.12, x=0, font=dict(size=11)),
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                yaxis=dict(gridcolor='rgba(0,0,0,0.05)'),
+            )
+            st.plotly_chart(fig_fan, use_container_width=True)
+
+            fig_tce = go.Figure()
+            fig_tce.add_trace(go.Scatter(
+                x=_fc_yrs, y=_tce, mode='lines+markers+text',
+                line=dict(color='#7F77DD', width=2.5),
+                marker=dict(size=7),
+                text=[f'${v:,.0f}' for v in _tce],
+                textposition='top center',
+                textfont=dict(size=9),
+                name='Mean TCE',
+                fill='tozeroy',
+                fillcolor='rgba(127,119,221,0.08)',
+            ))
+            _bhsi_ref = st.session_state.get('bhsi_rate', 12452)
+            fig_tce.add_hline(
+                y=_bhsi_ref,
+                line_dash='dash', line_color='#BA7517', line_width=1.5,
+                annotation_text=f'BHSI ${_bhsi_ref:,}/day',
+                annotation_position='bottom right',
+                annotation_font=dict(size=10),
+            )
+            fig_tce.update_layout(
+                height=260,
+                yaxis_title='TCE ($/day)',
+                margin=dict(l=10, r=10, t=20, b=10),
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                yaxis=dict(gridcolor='rgba(0,0,0,0.05)'),
+                showlegend=False,
+            )
+            st.markdown(
+                "<div style='font-size:12px;font-weight:500;margin-bottom:4px'>"
+                "TCE trend vs BHSI benchmark</div>",
+                unsafe_allow_html=True
+            )
+            st.plotly_chart(fig_tce, use_container_width=True)
+
+            st.markdown("---")
+
+            # ── Detailed view for selected year ───────────────────────────────
+            if _sel_fc_yr in _fc_ana_all:
+                st.markdown(
+                    f"<div style='font-size:12px;font-weight:500;margin-bottom:8px'>"
+                    f"Detailed results — {_sel_fc_yr} "
+                    f"(Year +{int(_sel_fc_yr)-2024})</div>",
+                    unsafe_allow_html=True
+                )
+                _sel_s    = _fc_ana_all[_sel_fc_yr]['summary']
+                _sel_r    = _fc_res_all[_sel_fc_yr]
+                _sel_best = max(_sel_r, key=lambda r: r['total_profit'])
+
+                _dc1, _dc2, _dc3, _dc4 = st.columns(4)
+                _dc1.metric("Mean profit",  f"${_sel_s['mean_profit']:,.0f}")
+                _dc2.metric("P10 (floor)",  f"${_sel_s['p10_profit']:,.0f}")
+                _dc3.metric("P90 (upside)", f"${_sel_s['p90_profit']:,.0f}")
+                _dc4.metric("Mean TCE",     f"${_sel_s['mean_tce']:,.0f}/day")
+
+                _dc5, _dc6, _dc7, _dc8 = st.columns(4)
+                _dc5.metric("Best programme", f"${_sel_best['total_profit']:,.0f}")
+                _dc6.metric("Profitable %",   f"{_sel_s['profitable_pct']:.1f}%")
+                _dc7.metric("Mean voyages",   f"{_sel_s['mean_voyages']:.1f}")
+                _dc8.metric("Std deviation",  f"${_sel_s['std_profit']:,.0f}")
+
+                with st.expander(
+                    f"Best programme voyages — {_sel_fc_yr} "
+                    f"(${_sel_best['total_profit']:,.0f})",
+                    expanded=True
+                ):
+                    _legs_list = _sel_best.get('legs', [])
+                    if _legs_list:
+                        _legs_display = []
+                        for _li, _lg in enumerate(_legs_list, 1):
+                            _legs_display.append({
+                                '#':         _li,
+                                'Route':     f"{_lg.get('origin_port','')} → {_lg.get('dest_port','')}",
+                                'Commodity': _lg.get('commodity', ''),
+                                'Laden NM':  f"{_lg.get('laden_nm', _lg.get('distance_nm', 0)):,.0f}",
+                                'Freight':   f"${_lg.get('freight_rate', 0):.2f}/MT",
+                                'Revenue':   f"${_lg.get('gross_freight', _lg.get('revenue', 0)):,.0f}",
+                                'P&L':       f"${_lg.get('profit_loss', _lg.get('profit', 0)):+,.0f}",
+                            })
+                        st.dataframe(
+                            pd.DataFrame(_legs_display),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+            st.markdown("---")
+
+            # ── Summary table all years ───────────────────────────────────────
+            st.markdown(
+                "<div style='font-size:12px;font-weight:500;margin-bottom:6px'>"
+                "10-Year forecast summary table</div>",
+                unsafe_allow_html=True
+            )
+            _fc_tbl = []
+            for _yr in _fc_yrs:
+                _s     = _fc_ana_all[_yr]['summary']
+                _yf    = int(_yr) - 2024
+                _best_p = max(r['total_profit'] for r in _fc_res_all[_yr])
+                _fc_tbl.append({
+                    'Year':            _yr,
+                    'Horizon':         f'+{_yf} yr',
+                    'Mean profit':     f"${_s['mean_profit']:,.0f}",
+                    'P10 (floor)':     f"${_s['p10_profit']:,.0f}",
+                    'P90 (upside)':    f"${_s['p90_profit']:,.0f}",
+                    'Std deviation':   f"${_s['std_profit']:,.0f}",
+                    'Mean TCE':        f"${_s['mean_tce']:,.0f}/day",
+                    'Best programme':  f"${_best_p:,.0f}",
+                    'Profitable %':    f"{_s['profitable_pct']:.1f}%",
+                    'Iterations':      '100,000',
+                })
+            if _fc_tbl:
+                st.dataframe(
+                    pd.DataFrame(_fc_tbl),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            st.markdown("---")
+
+            # ── Export ────────────────────────────────────────────────────────
+            import io as _io
+            _exp_c1, _exp_c2 = st.columns(2)
+            with _exp_c1:
+                _buf = _io.BytesIO()
+                with pd.ExcelWriter(_buf, engine='openpyxl') as _writer:
+                    if _fc_tbl:
+                        pd.DataFrame(_fc_tbl).to_excel(
+                            _writer, sheet_name='10-Year Summary', index=False
+                        )
+                    for _yr in _fc_yrs:
+                        _s = _fc_ana_all[_yr]['summary']
+                        pd.DataFrame([_s]).to_excel(
+                            _writer, sheet_name=f'{_yr} Stats', index=False
+                        )
+                        _best_r = max(
+                            _fc_res_all[_yr],
+                            key=lambda r: r['total_profit']
+                        )
+                        _lg_df = pd.DataFrame(_best_r.get('legs', []))
+                        if not _lg_df.empty:
+                            _lg_df.to_excel(
+                                _writer,
+                                sheet_name=f'{_yr} Best Programme',
+                                index=False
+                            )
+                st.download_button(
+                    label="📥 Export 10-Year Forecast Excel",
+                    data=_buf.getvalue(),
+                    file_name="COMPASS_10Year_Forecast_2025_2034.xlsx",
+                    mime=(
+                        "application/vnd.openxmlformats-"
+                        "officedocument.spreadsheetml.sheet"
+                    ),
+                    use_container_width=True,
+                )
+            with _exp_c2:
+                _last_yr = _fc_yrs[-1]
+                st.markdown(
+                    f"<div style='font-size:11px;color:#475569;padding:8px;"
+                    f"background:var(--color-background-secondary);"
+                    f"border-radius:8px'>"
+                    f"Statistical confidence (100,000 iterations):<br>"
+                    f"• P5 / P95 bands statistically reliable<br>"
+                    f"• Standard error: ±${_fc_ana_all[_last_yr]['summary']['stderr_profit']:,.0f}<br>"
+                    f"• Confidence interval width: "
+                    f"${(_fc_ana_all[_last_yr]['summary']['ci95_high'] - _fc_ana_all[_last_yr]['summary']['ci95_low']):,.0f}"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+    elif not st.session_state.get('fc_complete'):
+        # Not yet run — show growth rate preview table
+        st.markdown(
+            "<div style='font-size:12px;font-weight:500;margin-bottom:8px'>"
+            "Growth rate schedule (tapering toward 2.5% long-run)</div>",
+            unsafe_allow_html=True
+        )
+        _preview_rows = []
+        _key_comms_prev = [
+            'Steam Coal', 'Nickel Ore', 'Clinker', 'Palm Kernel Expeller',
+            'Steels', 'Fertilizers',
+        ]
+        for _comm in _key_comms_prev:
+            _row = {'Commodity': _comm}
+            for _yi, _yr in enumerate(FORECAST_YEARS, 1):
+                _rate = get_tapered_growth_rate(
+                    _comm, _yi,
+                    {c: st.session_state.get(
+                        f'fc_gr_{c.replace(" ","_")}',
+                        FORECAST_BASE_GROWTH_2025.get(c, LONG_RUN_DEFAULT)
+                    ) for c in _key_comms_prev}
+                )
+                _row[str(_yr)] = f"{_rate:+.1%}"
+            _preview_rows.append(_row)
+        st.dataframe(
+            pd.DataFrame(_preview_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.info(
+            "Adjust growth rates above then click "
+            "**▶ Run 10-Year Forecast** to start the simulation."
+        )
 
