@@ -4994,7 +4994,7 @@ with tabs[5]:
 
         with _ac1:
             st.markdown("**📌 General**")
-            _tax_rate        = st.number_input("Tax Rate (%)", value=15.0, step=0.5, key='fm_tax') / 100
+            _tax_rate        = st.number_input("Tax Rate (%)", value=30.0, step=0.5, key='fm_tax') / 100
             _op_inflation    = st.number_input("Operating Cost Inflation (%/yr)", value=2.5, step=0.25, key='fm_opinfl') / 100
             _freight_growth  = st.number_input("Freight Rate Growth (%/yr)", value=0.0, step=0.5, key='fm_frgtgr') / 100
             _days_year       = st.number_input("Operating Days/Year", value=365, step=1, key='fm_daysyr')
