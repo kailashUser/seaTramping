@@ -892,6 +892,7 @@ tabs = st.tabs([
     "🗺️ Voyage Analysis",
     "🚢 Voyage Journey",
     "⚓ Port Validation",
+    "💰 Financial Model",
 ])
 
 # ─── TAB 1: NETWORK & DATA (merged) ──────────────────────────────────────────
@@ -3497,6 +3498,8 @@ with tabs[2]:
 
 # ─── TAB 4: VOYAGE JOURNEY (animated vessel) ─────────────────────────────────
 with tabs[3]:
+    if '_vj_route_cache' in st.session_state:
+        del st.session_state['_vj_route_cache']
     if 'analysis' not in st.session_state:
         st.info(
             "Run the simulation first — click 🚀 Run Simulation "
@@ -3856,9 +3859,10 @@ with tabs[3]:
 <style>
 * {{ margin:0; padding:0; box-sizing:border-box; }}
 body {{ background:#0a1628; font-family:-apple-system,sans-serif; }}
-#map-wrap {{ position:relative; width:100%; height:480px; transition:height .3s; }}
+#map-wrap {{ display:flex; flex-direction:column; width:100%; background:#0a1628; }}
+#map-area {{ position:relative; width:100%; height:480px; }}
 #map {{ position:absolute; inset:0; border-radius:10px; overflow:hidden; }}
-.controls {{ display:flex; align-items:center; gap:8px; margin:8px 0 4px; flex-wrap:wrap; }}
+.controls {{ display:flex; align-items:center; gap:8px; margin:6px 0 2px; flex-wrap:wrap; }}
 .btn {{ background:#1a3a5c; color:white; border:none; padding:7px 16px;
         border-radius:8px; font-size:12px; cursor:pointer; min-width:80px; }}
 .btn:hover {{ background:#2d5986; }}
@@ -3869,7 +3873,7 @@ select {{ padding:6px 10px; border-radius:8px; border:1px solid #334155;
           font-size:12px; background:#1e293b; color:#e2e8f0; cursor:pointer; }}
 .badge {{ background:#1e293b; color:#7dd3fc; padding:6px 12px; border-radius:8px;
           font-size:12px; font-weight:500; border:1px solid #334155; white-space:nowrap; }}
-.stats {{ display:grid; grid-template-columns:repeat(7,1fr); gap:5px; margin-top:4px; }}
+.stats {{ display:grid; grid-template-columns:repeat(7,1fr); gap:5px; margin-bottom:4px; }}
 .stat {{ background:#1e293b; border-radius:8px; padding:6px 10px; border:1px solid #334155; }}
 .stat-lbl {{ font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:.05em; }}
 .stat-val {{ font-size:12px; font-weight:500; color:#e2e8f0; margin-top:2px;
@@ -3885,26 +3889,12 @@ select {{ padding:6px 10px; border-radius:8px; border:1px solid #334155;
 /* ── Full-screen overrides ── */
 :-webkit-full-screen body {{ background:#0a1628; overflow:hidden; }}
 :fullscreen          body {{ background:#0a1628; overflow:hidden; }}
-:-webkit-full-screen #map-wrap {{
-  width: 100vw !important;
-  height: calc(100vh - 170px) !important;
-  left: 0 !important;
-  position: relative !important;
-}}
-:fullscreen #map-wrap {{
-  width: 100vw !important;
-  height: calc(100vh - 170px) !important;
-  left: 0 !important;
-  position: relative !important;
-}}
-:-webkit-full-screen #map {{
-  width: 100% !important;
-  height: 100% !important;
-}}
-:fullscreen #map {{
-  width: 100% !important;
-  height: 100% !important;
-}}
+:-webkit-full-screen #map-wrap {{ width:100vw !important; height:100vh !important; }}
+:fullscreen          #map-wrap {{ width:100vw !important; height:100vh !important; }}
+:-webkit-full-screen #map-area {{ height:calc(100vh - 82px) !important; }}
+:fullscreen          #map-area {{ height:calc(100vh - 82px) !important; }}
+:-webkit-full-screen #map {{ border-radius:0 !important; }}
+:fullscreen          #map {{ border-radius:0 !important; }}
 :-webkit-full-screen .stats {{ grid-template-columns:repeat(7,1fr); }}
 :fullscreen          .stats {{ grid-template-columns:repeat(7,1fr); }}
 #route-popup {{
@@ -3940,6 +3930,7 @@ select {{ padding:6px 10px; border-radius:8px; border:1px solid #334155;
 </head>
 <body>
 <div id="map-wrap">
+  <div id="map-area">
   <div id="map"></div>
   <div id="vessel-icon" style="position:absolute;z-index:999;pointer-events:none;transform:translate(-50%,-50%);display:none">
     <div style="position:relative;width:72px;height:72px;display:flex;align-items:center;justify-content:center">
@@ -3971,7 +3962,7 @@ select {{ padding:6px 10px; border-radius:8px; border:1px solid #334155;
     <hr class="pp-divider">
     <div class="pp-grid" id="pp-grid-el"></div>
   </div>
-  <div id="map-legend" style="position:absolute;bottom:48px;left:12px;display:flex;gap:14px;flex-wrap:wrap;pointer-events:none;z-index:600;">
+  <div id="map-legend" style="position:absolute;bottom:8px;left:12px;display:flex;gap:14px;flex-wrap:wrap;pointer-events:none;z-index:600;">
     <div style="display:flex;align-items:center;gap:5px">
       <div style="width:24px;height:3px;background:rgba(203,213,225,0.9);border-top:2px solid rgba(203,213,225,0.9)"></div>
       <span style="font-size:10px;color:rgba(203,213,225,0.85)">Ballast (empty)</span>
@@ -4001,15 +3992,15 @@ select {{ padding:6px 10px; border-radius:8px; border:1px solid #334155;
       <span style="font-size:10px;color:rgba(203,213,225,0.85)">Vessel</span>
     </div>
   </div>
-</div>
-<div class="controls">
+  </div>
+  <div class="controls">
   <button class="btn" id="btnPlay" onclick="togglePlay()">&#9654; Play</button>
   <button class="btn-sec" onclick="resetAnim()">&#8635; Reset</button>
   <select id="spdSel" onchange="setSpd(this.value)">
-    <option value="120">Slow</option>
-    <option value="60" selected>Normal</option>
-    <option value="30">Fast</option>
-    <option value="15">Very Fast</option>
+    <option value="800">Slow</option>
+    <option value="400" selected>Normal</option>
+    <option value="150">Fast</option>
+    <option value="60">Very Fast</option>
   </select>
   <input type="range" id="scrub" min="0" max="100" value="0" step="1"
          style="flex:1;min-width:80px;accent-color:#3b82f6">
@@ -4030,6 +4021,7 @@ select {{ padding:6px 10px; border-radius:8px; border:1px solid #334155;
     <div class="stat-val" id="sCum">$0</div></div>
   <div class="stat"><div class="stat-lbl">Days elapsed</div>
     <div class="stat-val" id="sDays">0 d</div></div>
+</div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist@2.26.0/plotly.min.js"></script>
 <script>
@@ -4172,8 +4164,10 @@ Plotly.newPlot('map', traces, layout, {{
     }});
     if (maxLat > minLat) {{
       const cLat=(minLat+maxLat)/2, cLon=(minLon+maxLon)/2;
-      const span=Math.max(maxLat-minLat, maxLon-minLon, 1);
-      const zoom=Math.max(1.5, Math.min(5.5, Math.log2(360/span)+0.3));
+      const latSpan = maxLat - minLat;
+      const lonSpan = maxLon - minLon;
+      const span = Math.max(latSpan, lonSpan, 1);
+      const zoom = Math.max(3.0, Math.min(5.5, Math.log2(180/span) + 2.2));
       Plotly.relayout('map', {{'mapbox.center':{{lat:cLat,lon:cLon}}, 'mapbox.zoom':zoom}});
     }}
   }})();
@@ -4191,32 +4185,27 @@ function toggleFullscreen() {{
   }}
 }}
 function _onFsChange() {{
-  projectedRoutes = null;
-  const isFS  = !!(document.fullscreenElement || document.webkitFullscreenElement);
+  const isFS = !!(document.fullscreenElement || document.webkitFullscreenElement);
   const fsBtn = document.getElementById('fsBtnEl');
   if (fsBtn) fsBtn.textContent = isFS ? '⊞' : '⛶';
-
-  // Force Plotly map to resize after fullscreen change
   setTimeout(function() {{
-    const mapEl = document.getElementById('map');
-    if (!mapEl) return;
+    const areaEl = document.getElementById('map-area');
+    if (!areaEl) return;
     if (isFS) {{
-      const fsWidth  = window.innerWidth;
-      const fsHeight = window.innerHeight - 170;
-      Plotly.relayout('map', {{
-        width:  fsWidth,
-        height: fsHeight,
-      }});
+      const ctrlH = (document.querySelector('.controls')||{{}}).offsetHeight || 36;
+      const statH = (document.querySelector('.stats')||{{}}).offsetHeight || 46;
+      areaEl.style.height = (window.innerHeight - ctrlH - statH - 10) + 'px';
     }} else {{
-      Plotly.relayout('map', {{
-        width:  null,
-        height: null,
-        autosize: true,
-      }});
+      areaEl.style.height = '480px';
     }}
+    Plotly.relayout('map', {{
+      width: areaEl.offsetWidth,
+      height: areaEl.offsetHeight
+    }});
     resizeOverlay();
+    projectedRoutes = null;
     setTimeout(updateProjectedRoutes, 300);
-  }}, 150);
+  }}, 200);
 }}
 document.addEventListener('fullscreenchange',       _onFsChange);
 document.addEventListener('webkitfullscreenchange', _onFsChange);
@@ -4244,11 +4233,12 @@ function positionVesselIcon(lat, lng, bearingDeg) {{
   const icon = document.getElementById('vessel-icon');
   const mbMap = getMapboxMap();
   if (!mbMap || !icon) return;
+  // project() returns pixel coords relative to the Mapbox GL canvas.
+  // #vessel-icon is a child of #map-area; #map is position:absolute;inset:0 inside #map-area.
+  // So pt.x/pt.y are direct pixel offsets within #map-area — no adjustment needed.
   const pt = mbMap.project([lng, lat]);
-  const mapRect  = document.getElementById('map').getBoundingClientRect();
-  const wrapRect = document.getElementById('map-wrap').getBoundingClientRect();
-  icon.style.left = (pt.x + mapRect.left - wrapRect.left) + 'px';
-  icon.style.top  = (pt.y + mapRect.top  - wrapRect.top)  + 'px';
+  icon.style.left = pt.x + 'px';
+  icon.style.top  = pt.y + 'px';
   icon.style.transform = `translate(-50%,-50%) rotate(${{bearingDeg}}deg)`;
   icon.style.display = 'block';
 }}
@@ -4257,7 +4247,8 @@ function positionVesselIcon(lat, lng, bearingDeg) {{
 const routeOverlay = document.getElementById('route-overlay');
 
 function resizeOverlay() {{
-  const rect = document.getElementById('map').getBoundingClientRect();
+  const el = document.getElementById('map-area') || document.getElementById('map');
+  const rect = el.getBoundingClientRect();
   if (rect.width > 0) {{ routeOverlay.width = rect.width; routeOverlay.height = rect.height; }}
 }}
 window.addEventListener('resize', resizeOverlay);
@@ -4327,9 +4318,9 @@ function fmtM(n) {{ return '$'+Math.abs(n||0).toLocaleString('en-US',{{maximumFr
 function showRoutePopup(vi,mx,my) {{
   const v=VOYAGES[vi];
   const popup=document.getElementById('route-popup');
-  const wrapEl=document.getElementById('map-wrap');
-  const mapRect=document.getElementById('map').getBoundingClientRect();
-  const wrapRect=wrapEl.getBoundingClientRect();
+  const wrapEl  = document.getElementById('map-area');
+  const mapRect = document.getElementById('map').getBoundingClientRect();
+  const wrapRect= wrapEl.getBoundingClientRect();
   const liveBadge=(vi===curV)
     ? '<span style="background:#1d4ed8;color:#bfdbfe;font-size:9px;padding:2px 7px;border-radius:20px;margin-left:6px;animation:pulse 1.5s ease-in-out infinite">&#9679; LIVE</span>'
     : '';
@@ -4418,81 +4409,98 @@ function tick(ts) {{
   else raf=null;
 }}
 
-function advance(dt) {{
-  const v=VOYAGES[curV]; if(!v) return;
-  const hasBallast = v.ballast_lats && v.ballast_lats.length > 1;
-  const phaseDays  = phase==='ballast' ? Math.max(v.ballast_days||0, 0.3)
-                                        : Math.max(v.laden_days || v.days || 1, 0.3);
-  t += (dt * 1000) / (spd * phaseDays);
-  cumDays += dt * phaseDays / phaseDays;  // increment by actual dt
+// Minimum phase duration in real seconds regardless of spd setting.
+// Prevents short voyages from completing in a single animation frame.
+const MIN_PHASE_REAL_SEC = 1.5;
 
+function advance(dt) {{
+  const v = VOYAGES[curV]; if (!v) return;
+  const hasBallast = v.ballast_lats && v.ballast_lats.length > 1;
+
+  // Phase duration in simulation days
+  const phaseDays = phase === 'ballast'
+    ? Math.max(v.ballast_days || 0, 0.5)
+    : Math.max(v.laden_days   || v.days || 1, 0.5);
+
+  // Real-time seconds this phase takes at current speed setting
+  // spd = ms per simulation day → real_sec = (phaseDays * spd) / 1000
+  const phaseRealSec = Math.max((phaseDays * spd) / 1000, MIN_PHASE_REAL_SEC);
+
+  // Clamp dt so we never advance more than one phase per frame
+  const safeDt = Math.min(dt, phaseRealSec * 0.95);
+
+  t += safeDt / phaseRealSec;
+  cumDays += safeDt * (phaseDays / phaseRealSec);
+
+  // ── Phase transition when t reaches 1.0 ─────────────────────────────────
   if (t >= 1) {{
     t = 0;
-    if (phase==='ballast' && hasBallast) {{
+    if (phase === 'ballast' && hasBallast) {{
       phase = 'laden';
     }} else {{
       curV++;
       phase = 'ballast';
       if (curV >= VOYAGES.length) {{
-        curV=VOYAGES.length-1; t=1; playing=false;
-        document.getElementById('btnPlay').innerHTML='&#9654; Play';
-        if(raf){{ cancelAnimationFrame(raf); raf=null; }}
+        curV = VOYAGES.length - 1; t = 1; playing = false;
+        document.getElementById('btnPlay').innerHTML = '&#9654; Play';
+        if (raf) {{ cancelAnimationFrame(raf); raf = null; }}
       }}
     }}
+    // Clear stale traces on phase/voyage change
+    Plotly.restyle('map', {{lat:[[]], lon:[[]]}},
+      [ACTIVE_BALLAST_IDX, ACTIVE_GLOW_IDX, ACTIVE_ARC_IDX]);
   }}
 
   const progress = Math.min(t, 1);
-  const v2 = VOYAGES[curV]; if(!v2) return;
-  const isBallastPhase = (phase==='ballast');
+  const v2 = VOYAGES[curV]; if (!v2) return;
+  const isBallast = (phase === 'ballast');
 
-  // Update active ballast trace
-  if (v2.ballast_lats && v2.ballast_lats.length > 1 && isBallastPhase) {{
-    const end = Math.floor(progress * v2.ballast_lats.length);
+  // ── Active route trace ────────────────────────────────────────────────────
+  if (isBallast && v2.ballast_lats && v2.ballast_lats.length > 1) {{
+    const end = Math.max(1, Math.floor(progress * v2.ballast_lats.length));
     Plotly.restyle('map', {{
-      lat: [v2.ballast_lats.slice(0, end+1)],
-      lon: [v2.ballast_lons.slice(0, end+1)]
+      lat: [v2.ballast_lats.slice(0, end + 1)],
+      lon: [v2.ballast_lons.slice(0, end + 1)]
     }}, [ACTIVE_BALLAST_IDX]);
-  }} else {{
+    Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_GLOW_IDX, ACTIVE_ARC_IDX]);
+  }} else if (!isBallast && v2.lats && v2.lats.length) {{
+    const end = Math.max(1, Math.floor(progress * v2.lats.length));
+    const slab = {{
+      lat: [v2.lats.slice(0, end + 1)],
+      lon: [v2.lons.slice(0, end + 1)]
+    }};
+    Plotly.restyle('map', slab, [ACTIVE_GLOW_IDX]);
+    Plotly.restyle('map', slab, [ACTIVE_ARC_IDX]);
     Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_BALLAST_IDX]);
   }}
 
-  // Update active laden trace + glow halo
-  if (!isBallastPhase && v2.lats.length) {{
-    const end     = Math.floor(progress * v2.lats.length);
-    const arcSlab = {{
-      lat: [v2.lats.slice(0, end+1)],
-      lon: [v2.lons.slice(0, end+1)]
-    }};
-    Plotly.restyle('map', arcSlab, [ACTIVE_GLOW_IDX]);
-    Plotly.restyle('map', arcSlab, [ACTIVE_ARC_IDX]);
-    const trailStart = Math.max(0, arcSlab.lat[0].length - Math.floor(arcSlab.lat[0].length * 0.25));
-    Plotly.restyle('map', {{
-      lat: [arcSlab.lat[0].slice(trailStart)],
-      lon: [arcSlab.lon[0].slice(trailStart)]
-    }}, [VESSEL_TRAIL_IDX]);
-  }} else {{
-    Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_GLOW_IDX]);
-    Plotly.restyle('map', {{lat:[[]], lon:[[]]}}, [ACTIVE_ARC_IDX]);
-  }}
+  // ── Vessel icon position ──────────────────────────────────────────────────
+  const arcLat = isBallast ? v2.ballast_lats : v2.lats;
+  const arcLon = isBallast ? v2.ballast_lons : v2.lons;
 
-  // Position vessel SVG icon
-  const arcLat = isBallastPhase ? v2.ballast_lats : v2.lats;
-  const arcLon = isBallastPhase ? v2.ballast_lons : v2.lons;
-  if (arcLat && arcLat.length) {{
-    const idx = Math.min(Math.floor(progress * arcLat.length), arcLat.length-1);
-    const lat = arcLat[idx], lon = arcLon[idx];
+  if (arcLat && arcLat.length > 0) {{
+    // Smooth sub-waypoint interpolation using fractional index
+    const fIdx = progress * (arcLat.length - 1);
+    const iLo  = Math.floor(fIdx);
+    const iHi  = Math.min(iLo + 1, arcLat.length - 1);
+    const frac = fIdx - iLo;
+
+    const lat = arcLat[iLo] + frac * (arcLat[iHi] - arcLat[iLo]);
+    const lon = arcLon[iLo] + frac * (arcLon[iHi] - arcLon[iLo]);
+
     let brg = 0;
-    if (idx > 0) {{
-      brg = bearing(arcLat[idx-1], arcLon[idx-1], lat, lon);
+    if (iLo > 0) {{
+      brg = bearing(arcLat[iLo - 1], arcLon[iLo - 1], arcLat[iLo], arcLon[iLo]);
     }} else if (arcLat.length > 1) {{
-      brg = bearing(lat, lon, arcLat[1], arcLon[1]);
+      brg = bearing(arcLat[0], arcLon[0], arcLat[1], arcLon[1]);
     }}
     positionVesselIcon(lat, lon, brg);
   }}
 
-  // Scrub bar
-  const overall = (curV + (isBallastPhase ? 0 : 0.5) + progress*0.5) / VOYAGES.length;
-  document.getElementById('scrub').value = Math.round(overall*100);
+  // ── Scrub bar ─────────────────────────────────────────────────────────────
+  const phaseOffset = isBallast ? 0 : 0.5;
+  const overall = (curV + phaseOffset + progress * 0.5) / VOYAGES.length;
+  document.getElementById('scrub').value = Math.round(overall * 100);
 }}
 
 function updateHUD() {{
@@ -4902,4 +4910,685 @@ with tabs[4]:
         f"Vessel specs: Draft laden {vessel_draft}m | "
         f"Ballast {vessel_draft_b}m | LOA {vessel_loa}m | Beam {vessel_beam}m"
     )
+
+# ─── TAB 6: FINANCIAL MODEL ────────────────────────────────────────────────
+# Additive only — does not modify any existing tabs or code above.
+with tabs[5]:
+
+    import io as _io
+
+    # ── Simulation data availability check ───────────────────────────────────
+    _results = st.session_state.get('results', [])
+    _has_sim = bool(_results)
+
+    if not _has_sim:
+        st.info(
+            "▶ Run the simulation first to populate the Financial Model. "
+            "The model uses the best programme output from your simulation."
+        )
+        st.stop()
+
+    # ── Extract best programme data from simulation ───────────────────────────
+    _best_r = max(_results, key=lambda r: r['total_profit'])
+    _legs   = _best_r.get('legs', [])
+
+    def _sum(field, fallback=0):
+        """Sum a field across all legs of best programme."""
+        return sum(l.get(field, fallback) for l in _legs)
+
+    # Simulation Year 1 actuals (from best programme)
+    _SIM = {
+        'gross_freight':  _sum('gross_freight'),
+        'brokerage':      _sum('brokerage'),
+        'net_income':     _sum('net_income'),
+        'charter_hire':   _sum('charter_hire', _sum('charter_hire_cost')),
+        'lsfo_cost':      _sum('lsfo_cost'),
+        'mgo_cost':       _sum('mgo_cost'),
+        'lsfo_mt':        _sum('lsfo_mt'),
+        'mgo_mt':         _sum('mgo_mt'),
+        'port_costs':     _sum('port_costs'),
+        'insurance':      _sum('insurance'),
+        'other_costs':    _sum('other_costs'),
+        'total_expenses': _sum('total_expenses', _sum('total_cost')),
+        'total_days':     _sum('total_days'),
+        'n_voyages':      _best_r.get('n_voyages', len(_legs)),
+        'total_cargo_mt': _best_r.get('total_cargo_mt', _sum('cargo_mt')),
+        'total_profit':   _best_r.get('total_profit', 0),
+        'avg_tce':        _best_r.get('avg_tce', 0),
+    }
+    _SIM['bunker_cost'] = _SIM['lsfo_cost'] + _SIM['mgo_cost']
+    _vessel = st.session_state.get('vessel_config', {})
+
+    # ── Page header ───────────────────────────────────────────────────────────
+    st.markdown(
+        "<div style='font-size:15px;font-weight:600;color:#e2e8f0;margin-bottom:4px'>"
+        "💰 Financial Model — SEA Tramping Voyage Programme</div>"
+        "<div style='font-size:11px;color:#64748b;margin-bottom:16px'>"
+        "Populated from best simulation programme. "
+        "Edit assumptions below before viewing projections.</div>",
+        unsafe_allow_html=True
+    )
+
+    # ── Sub-tabs for the financial model ─────────────────────────────────────
+    _ft = st.tabs([
+        "⚙️ Assumptions",
+        "📊 Income Statement",
+        "📋 Project Evaluation",
+        "💵 Cashflow Statement",
+        "🔧 Operating Costs",
+        "🏦 Working Capital",
+    ])
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # ASSUMPTIONS TAB
+    # ════════════════════════════════════════════════════════════════════════════
+    with _ft[0]:
+        st.markdown(
+            "<div style='font-size:12px;font-weight:500;color:#94a3b8;"
+            "margin-bottom:12px'>Blue values are from simulation. "
+            "Edit any field to run scenarios.</div>",
+            unsafe_allow_html=True
+        )
+
+        _ac1, _ac2, _ac3 = st.columns(3)
+
+        with _ac1:
+            st.markdown("**📌 General**")
+            _tax_rate        = st.number_input("Tax Rate (%)", value=15.0, step=0.5, key='fm_tax') / 100
+            _op_inflation    = st.number_input("Operating Cost Inflation (%/yr)", value=2.5, step=0.25, key='fm_opinfl') / 100
+            _freight_growth  = st.number_input("Freight Rate Growth (%/yr)", value=0.0, step=0.5, key='fm_frgtgr') / 100
+            _days_year       = st.number_input("Operating Days/Year", value=365, step=1, key='fm_daysyr')
+            _charter_escl    = st.number_input("Charter Hire Escalation (%/yr)", value=3.0, step=0.5, key='fm_chescl') / 100
+            _wacc            = st.number_input("WACC (%)", value=10.97, step=0.5, key='fm_wacc') / 100
+            _horizon_charter = st.number_input("Charter Option Horizon (years)", value=5, min_value=1, max_value=20, key='fm_horch')
+            _horizon_purch   = st.number_input("Purchase Option Horizon (years)", value=10, min_value=1, max_value=20, key='fm_horpu')
+
+        with _ac2:
+            st.markdown("**🚢 Vessel Investment (Purchase Option)**")
+            _vessel_cost     = st.number_input("Vessel Cost (USD)", value=10_000_000, step=100_000, key='fm_vcost')
+            _vessel_life     = st.number_input("Useful Life (years)", value=10, step=1, key='fm_vlife')
+            _residual_value  = st.number_input("Residual Value (USD)", value=0, step=100_000, key='fm_resid')
+            _cap_allow_rate  = st.number_input("Capital Allowance Rate (%/yr)", value=20.0, step=1.0, key='fm_capalw') / 100
+            _cap_allow_yrs   = st.number_input("Capital Allowance Period (yrs)", value=5, step=1, key='fm_cayrs')
+            _loan_pct        = st.number_input("Debt/Equity Split — Debt (%)", value=80.0, step=5.0, key='fm_debtpct') / 100
+            _interest_rate   = st.number_input("Interest Rate (%/yr)", value=8.0, step=0.5, key='fm_intrst') / 100
+            _grace_months    = st.number_input("Grace Period (months)", value=0, min_value=0, max_value=24, key='fm_grace')
+            _loan_term_yrs   = st.number_input("Loan Term (years)", value=5, min_value=1, max_value=20, key='fm_loanterm')
+
+        with _ac3:
+            st.markdown("**🏗️ Dry Dock Schedule**")
+            _dd1_yr   = st.number_input("Dry Dock 1 — Year", value=3, min_value=1, key='fm_dd1yr')
+            _dd1_cost = st.number_input("Dry Dock 1 — Cost (USD)", value=131_250, step=5_000, key='fm_dd1cost')
+            _dd2_yr   = st.number_input("Dry Dock 2 — Year", value=6, min_value=1, key='fm_dd2yr')
+            _dd2_cost = st.number_input("Dry Dock 2 — Cost (USD)", value=137_812, step=5_000, key='fm_dd2cost')
+            _dd3_yr   = st.number_input("Dry Dock 3 — Year", value=8, min_value=1, key='fm_dd3yr')
+            _dd3_cost = st.number_input("Dry Dock 3 — Cost (USD)", value=144_703, step=5_000, key='fm_dd3cost')
+
+            st.markdown("**📦 Working Capital**")
+            _debtor_days   = st.number_input("Debtor Days", value=30, min_value=0, key='fm_debdays')
+            _creditor_days = st.number_input("Creditor Days", value=30, min_value=0, key='fm_creddays')
+            _wc_hire_days  = st.number_input("Charter Hire Advance (days)", value=60, min_value=0, key='fm_hiredays')
+
+        # ── Simulation summary banner ─────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("**📡 Simulation Year 1 Data (from best programme)**")
+        _sb1, _sb2, _sb3, _sb4, _sb5 = st.columns(5)
+        _sb1.metric("Gross Freight", f"${_SIM['gross_freight']:,.0f}")
+        _sb2.metric("Charter Hire", f"${_SIM['charter_hire']:,.0f}")
+        _sb3.metric("Total Bunker", f"${_SIM['bunker_cost']:,.0f}")
+        _sb4.metric("Port Costs", f"${_SIM['port_costs']:,.0f}")
+        _sb5.metric("Net Profit", f"${_SIM['total_profit']:,.0f}")
+
+    # ── Helper functions ──────────────────────────────────────────────────────
+    def _annual_dep(yr):
+        """Annual depreciation: vessel straight-line + dry dock amortisation."""
+        vessel_dep = (_vessel_cost - _residual_value) / _vessel_life
+        dd_dep = 0.0
+        for dd_yr, dd_cost in [(_dd1_yr, _dd1_cost), (_dd2_yr, _dd2_cost), (_dd3_yr, _dd3_cost)]:
+            if yr >= dd_yr:
+                remaining = _vessel_life - dd_yr + 1
+                dd_dep += dd_cost / max(remaining, 1)
+        return vessel_dep + dd_dep
+
+    def _op_costs(yr, option='charter'):
+        """Operating costs for year yr, inflated."""
+        factor = (1 + _op_inflation) ** (yr - 1)
+        if option == 'charter':
+            hire   = _SIM['charter_hire'] * (1 + _charter_escl) ** (yr - 1)
+            lsfo   = _SIM['lsfo_cost']   * factor
+            mgo    = _SIM['mgo_cost']    * factor
+            port   = _SIM['port_costs']  * factor
+            ins    = _SIM['insurance']   * factor
+            other  = _SIM['other_costs'] * factor
+            return {'charter_hire': hire, 'lsfo': lsfo, 'mgo': mgo,
+                    'bunker': lsfo + mgo, 'port': port, 'insurance': ins,
+                    'other': other,
+                    'total': hire + lsfo + mgo + port + ins + other}
+        else:
+            lsfo   = _SIM['lsfo_cost']   * factor
+            mgo    = _SIM['mgo_cost']    * factor
+            port   = _SIM['port_costs']  * factor
+            ins    = _SIM['insurance']   * factor
+            other  = _SIM['other_costs'] * factor
+            return {'charter_hire': 0, 'lsfo': lsfo, 'mgo': mgo,
+                    'bunker': lsfo + mgo, 'port': port, 'insurance': ins,
+                    'other': other,
+                    'total': lsfo + mgo + port + ins + other}
+
+    def _gross_freight(yr):
+        gf = _SIM['gross_freight'] * (1 + _freight_growth) ** (yr - 1)
+        return gf, gf * 0.0375, gf * (1 - 0.0375)
+
+    def _interest_charter(yr):
+        """Interest on working capital loan (2-year)."""
+        loan = _wc_req('charter')['total']
+        debt = loan * _loan_pct
+        rate = _interest_rate
+        if yr == 1:
+            return debt * rate
+        elif yr == 2:
+            return (debt * 0.5) * rate
+        return 0.0
+
+    def _interest_purchase(yr):
+        """Interest on vessel purchase loan."""
+        loan_amount = _vessel_cost * _loan_pct
+        r_monthly   = _interest_rate / 12
+        n_months    = _loan_term_yrs * 12
+        if n_months == 0 or r_monthly == 0:
+            return 0.0
+        pmt = loan_amount * r_monthly / (1 - (1 + r_monthly) ** (-n_months))
+        bal = loan_amount
+        total_interest = 0.0
+        for m in range(1, n_months + 1):
+            interest  = bal * r_monthly
+            principal = pmt - interest
+            month_yr  = (m - 1) // 12 + 1
+            if month_yr == yr:
+                total_interest += interest
+            bal -= principal
+            if bal <= 0:
+                break
+        return total_interest if yr <= _loan_term_yrs else 0.0
+
+    def _capital_allowance(yr):
+        """Capital allowance for purchase option."""
+        if yr <= _cap_allow_yrs:
+            return _vessel_cost * _cap_allow_rate
+        return 0.0
+
+    def _wc_req(option='charter'):
+        """Working capital requirement."""
+        frac = _wc_hire_days / 365
+        if option == 'charter':
+            hire  = _SIM['charter_hire'] * frac
+            lsfo  = _SIM['lsfo_cost']   * (_wc_hire_days / 365)
+            mgo   = _SIM['mgo_cost']    * (_wc_hire_days / 365)
+            port  = _SIM['port_costs']  * (_wc_hire_days / 365)
+            ins   = _SIM['insurance']   * (_wc_hire_days / 365)
+            other = _SIM['other_costs'] * (_wc_hire_days / 365)
+            deb_pct  = _debtor_days  / 365
+            cred_pct = _creditor_days / 365
+            debtors   = _SIM['net_income'] * deb_pct
+            creditors = (_SIM['charter_hire'] + _SIM['bunker_cost'] + _SIM['port_costs']) * cred_pct
+            return {'charter_advance': hire, 'lsfo': lsfo, 'mgo': mgo,
+                    'port': port, 'insurance': ins, 'other': other,
+                    'debtors': debtors, 'creditors': creditors,
+                    'total': max(0, hire + lsfo + mgo + port + ins + other)}
+        else:
+            deb_pct  = _debtor_days  / 365
+            cred_pct = _creditor_days / 365
+            op = _op_costs(1, 'purchase')
+            debtors   = _SIM['net_income'] * deb_pct
+            creditors = op['total'] * cred_pct
+            return {'debtors': debtors, 'creditors': creditors,
+                    'total': max(0, debtors - creditors)}
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # INCOME STATEMENT TAB
+    # ════════════════════════════════════════════════════════════════════════════
+    with _ft[1]:
+        st.markdown("**Income Statement — Charter Option vs Purchase Option**")
+
+        def _build_income_statement(option, horizon):
+            years  = list(range(1, horizon + 1))
+            yrlbls = [f"Yr {y}" for y in years]
+
+            gf_vals  = [_gross_freight(y)[0] for y in years]
+            brk_vals = [_gross_freight(y)[1] for y in years]
+            ni_vals  = [_gross_freight(y)[2] for y in years]
+            oc_vals  = [_op_costs(y, option)['total'] for y in years]
+            gp_vals  = [ni - oc for ni, oc in zip(ni_vals, oc_vals)]
+            dep_vals = [_annual_dep(y) if option == 'purchase' else 0.0 for y in years]
+            ebit_v   = [gp - dep for gp, dep in zip(gp_vals, dep_vals)]
+            int_fn   = _interest_purchase if option == 'purchase' else _interest_charter
+            int_vals = [int_fn(y) for y in years]
+            pbt_vals = [e - i for e, i in zip(ebit_v, int_vals)]
+            tax_vals = [max(0, p) * _tax_rate for p in pbt_vals]
+            pat_vals = [p - t for p, t in zip(pbt_vals, tax_vals)]
+
+            data = {'Line Item': [
+                'Gross Revenue', 'Commission (3.75%)', 'Net Revenue',
+                'Operating Costs', 'Gross Profit',
+                *(('Depreciation',) if option == 'purchase' else ()),
+                'EBIT', 'Interest', 'PBT', 'Tax', 'PAT (Net Profit)',
+                'PBT Margin %', 'PAT Margin %', 'TCE ($/day)',
+            ]}
+            for y in years:
+                data[f"Yr {y}"] = []
+
+            def _add(vals, fmt='$'):
+                for y, v in zip(years, vals):
+                    if fmt == '$':
+                        data[f"Yr {y}"].append(f"${v:,.0f}")
+                    elif fmt == '%':
+                        data[f"Yr {y}"].append(f"{v:.1f}%")
+                    else:
+                        data[f"Yr {y}"].append(f"${v:,.0f}/day")
+
+            _add(gf_vals)
+            _add([-b for b in brk_vals])
+            _add(ni_vals)
+            _add([-o for o in oc_vals])
+            _add(gp_vals)
+            if option == 'purchase':
+                _add([-d for d in dep_vals])
+            _add(ebit_v)
+            _add([-i for i in int_vals])
+            _add(pbt_vals)
+            _add([-t for t in tax_vals])
+            _add(pat_vals)
+            _add([p/g*100 if g else 0 for p, g in zip(pbt_vals, gf_vals)], '%')
+            _add([p/g*100 if g else 0 for p, g in zip(pat_vals, gf_vals)], '%')
+            tce_vals = [(gf - oc - brk) / max(_SIM['total_days'], 1)
+                        for gf, oc, brk in zip(gf_vals, oc_vals, brk_vals)]
+            _add(tce_vals, 'tce')
+
+            return pd.DataFrame(data)
+
+        _opt_tab_is, _opt_tab_pu = st.tabs(["Charter Option", "Purchase Option"])
+        with _opt_tab_is:
+            st.dataframe(_build_income_statement('charter', int(_horizon_charter)),
+                         use_container_width=True, hide_index=True)
+        with _opt_tab_pu:
+            st.dataframe(_build_income_statement('purchase', int(_horizon_purch)),
+                         use_container_width=True, hide_index=True)
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # PROJECT EVALUATION TAB
+    # ════════════════════════════════════════════════════════════════════════════
+    with _ft[2]:
+        st.markdown("**Project Evaluation (NPV, IRR, Payback, ROI)**")
+
+        def _build_project_eval(option, horizon):
+            years  = list(range(1, horizon + 1))
+            wc     = _wc_req(option)
+            invest = _vessel_cost + wc['total'] if option == 'purchase' else wc['total']
+
+            int_fn = _interest_purchase if option == 'purchase' else _interest_charter
+
+            ebit_vals, dep_vals, tax_vals, ncf_vals, pbt_vals = [], [], [], [], []
+            for y in years:
+                gf, brk, ni = _gross_freight(y)
+                oc   = _op_costs(y, option)['total']
+                gp   = ni - oc
+                dep  = _annual_dep(y) if option == 'purchase' else 0.0
+                ebit = gp - dep
+                intr = int_fn(y)
+                pbt  = ebit - intr
+                tax  = max(0, pbt) * _tax_rate
+                pat  = pbt - tax
+                ncf  = pat + dep
+                ebit_vals.append(ebit)
+                dep_vals.append(dep)
+                pbt_vals.append(pbt)
+                tax_vals.append(tax)
+                ncf_vals.append(ncf)
+
+            wacc = _wacc
+            npv  = -invest + sum(ncf / (1 + wacc) ** y for y, ncf in enumerate(ncf_vals, 1))
+
+            def _irr():
+                rate = 0.1
+                for _ in range(100):
+                    pv  = sum(ncf / (1 + rate) ** y for y, ncf in enumerate(ncf_vals, 1))
+                    dpv = sum(-y * ncf / (1 + rate) ** (y + 1) for y, ncf in enumerate(ncf_vals, 1))
+                    f   = -invest + pv
+                    if abs(dpv) < 1e-10:
+                        break
+                    rate -= f / dpv
+                    if rate <= -1:
+                        rate = 0.001
+                return rate
+            irr = _irr()
+
+            payback = None
+            for i, ncf in enumerate(ncf_vals, 1):
+                if sum(ncf_vals[:i]) >= invest and payback is None:
+                    prev_cum = sum(ncf_vals[:i-1]) if i > 1 else 0
+                    payback  = (i - 1) + (invest - prev_cum) / ncf_vals[i-1]
+            if payback is None:
+                payback = float('inf')
+
+            cum_cf  = []
+            running = -invest
+            for ncf in ncf_vals:
+                running += ncf
+                cum_cf.append(running)
+
+            data = {'Line Item': ['Investment', 'EBIT', 'Add: Depreciation',
+                                   'Less: Tax', 'Net Cash Flow', 'Cumulative Cashflow']}
+            for i, y in enumerate(years):
+                col = f"Yr {y}"
+                data[col] = [
+                    f"${-invest:,.0f}" if i == 0 else '',
+                    f"${ebit_vals[i]:,.0f}",
+                    f"${dep_vals[i]:,.0f}",
+                    f"${-tax_vals[i]:,.0f}",
+                    f"${ncf_vals[i]:,.0f}",
+                    f"${cum_cf[i]:,.0f}",
+                ]
+            df = pd.DataFrame(data)
+
+            k1, k2, k3, k4, k5 = st.columns(5)
+            k1.metric("NPV",        f"${npv:,.0f}")
+            k2.metric("IRR",        f"{irr*100:.1f}%")
+            k3.metric("Payback",    f"{payback:.1f} yrs" if payback != float('inf') else "N/A")
+            k4.metric("Investment", f"${invest:,.0f}")
+            k5.metric("WACC",       f"{wacc*100:.2f}%")
+            return df
+
+        _opt_pe_ch, _opt_pe_pu = st.tabs(["Charter Option", "Purchase Option"])
+        with _opt_pe_ch:
+            _df_pe_ch = _build_project_eval('charter', int(_horizon_charter))
+            st.dataframe(_df_pe_ch, use_container_width=True, hide_index=True)
+        with _opt_pe_pu:
+            _df_pe_pu = _build_project_eval('purchase', int(_horizon_purch))
+            st.dataframe(_df_pe_pu, use_container_width=True, hide_index=True)
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # CASHFLOW STATEMENT TAB
+    # ════════════════════════════════════════════════════════════════════════════
+    with _ft[3]:
+        st.markdown("**Cashflow Statement**")
+
+        def _build_cashflow(option, horizon):
+            years       = list(range(1, horizon + 1))
+            int_fn      = _interest_purchase if option == 'purchase' else _interest_charter
+            wc          = _wc_req(option)
+            invest      = _vessel_cost + wc['total'] if option == 'purchase' else wc['total']
+            debt        = invest * _loan_pct
+            annual_repay = debt / min(horizon, _loan_term_yrs)
+
+            rows     = []
+            cum_cash = 0.0
+            for y in years:
+                gf, brk, ni = _gross_freight(y)
+                oc   = _op_costs(y, option)['total']
+                gp   = ni - oc
+                dep  = _annual_dep(y) if option == 'purchase' else 0.0
+                ebit = gp - dep
+                intr = int_fn(y)
+                pbt  = ebit - intr
+                tax  = max(0, pbt) * _tax_rate
+                pat  = pbt - tax
+                cf_ops  = pat + dep
+                repay   = -annual_repay if y <= _loan_term_yrs else 0.0
+                net_cf  = cf_ops + repay
+                cum_cash += net_cf
+                rows.append({
+                    'Year':                 f"Yr {y}",
+                    'Operating Profit':     f"${pat:,.0f}",
+                    '(+) Depreciation':     f"${dep:,.0f}",
+                    'Cash from Operations': f"${cf_ops:,.0f}",
+                    'Less: Tax':            f"${-tax:,.0f}",
+                    'Less: Interest':       f"${-intr:,.0f}",
+                    'Net Operating CF':     f"${pat:,.0f}",
+                    'Loan Repayment':       f"${repay:,.0f}",
+                    'Net Cash Flow':        f"${net_cf:,.0f}",
+                    'Cumulative CF':        f"${cum_cash:,.0f}",
+                })
+            rows.insert(0, {
+                'Year':                 'Today',
+                'Operating Profit':     '',
+                '(+) Depreciation':     '',
+                'Cash from Operations': '',
+                'Less: Tax':            '',
+                'Less: Interest':       '',
+                'Net Operating CF':     '',
+                'Loan Repayment':       f"${debt:,.0f}",
+                'Net Cash Flow':        f"${-wc['total']:,.0f}",
+                'Cumulative CF':        f"${-wc['total']:,.0f}",
+            })
+            return pd.DataFrame(rows)
+
+        _cf_ch, _cf_pu = st.tabs(["Charter Option", "Purchase Option"])
+        with _cf_ch:
+            st.dataframe(_build_cashflow('charter', int(_horizon_charter)),
+                         use_container_width=True, hide_index=True)
+        with _cf_pu:
+            st.dataframe(_build_cashflow('purchase', int(_horizon_purch)),
+                         use_container_width=True, hide_index=True)
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # OPERATING COSTS TAB
+    # ════════════════════════════════════════════════════════════════════════════
+    with _ft[4]:
+        st.markdown("**Operating Costs — Annual Breakdown (with inflation)**")
+
+        def _build_opcosts(option, horizon):
+            years = list(range(1, horizon + 1))
+            rows  = []
+            for y in years:
+                oc  = _op_costs(y, option)
+                dep = _annual_dep(y) if option == 'purchase' else 0.0
+                rows.append({
+                    'Year':          f"Yr {y}",
+                    'Charter Hire':  f"${oc['charter_hire']:,.0f}",
+                    'LSFO Bunker':   f"${oc['lsfo']:,.0f}",
+                    'MGO Bunker':    f"${oc['mgo']:,.0f}",
+                    'Total Bunker':  f"${oc['bunker']:,.0f}",
+                    'Port Costs':    f"${oc['port']:,.0f}",
+                    'Insurance':     f"${oc['insurance']:,.0f}",
+                    'Other Costs':   f"${oc['other']:,.0f}",
+                    'Total Op Cost': f"${oc['total']:,.0f}",
+                    'Depreciation':  f"${dep:,.0f}",
+                    'Total Incl Dep': f"${oc['total'] + dep:,.0f}",
+                    'DOC ($/day)':   f"${(oc['total'] + dep) / _days_year:,.0f}",
+                })
+            return pd.DataFrame(rows)
+
+        _oc_ch, _oc_pu = st.tabs(["Charter Option", "Purchase Option"])
+        with _oc_ch:
+            st.dataframe(_build_opcosts('charter', int(_horizon_charter)),
+                         use_container_width=True, hide_index=True)
+        with _oc_pu:
+            st.dataframe(_build_opcosts('purchase', int(_horizon_purch)),
+                         use_container_width=True, hide_index=True)
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # WORKING CAPITAL TAB
+    # ════════════════════════════════════════════════════════════════════════════
+    with _ft[5]:
+        st.markdown("**Working Capital Requirement**")
+
+        _wc_ch_tab, _wc_pu_tab = st.tabs(["Charter Option", "Purchase Option"])
+
+        for _opt_label, _wc_tab in [('charter', _wc_ch_tab), ('purchase', _wc_pu_tab)]:
+            with _wc_tab:
+                wc      = _wc_req(_opt_label)
+                horizon = int(_horizon_charter) if _opt_label == 'charter' else int(_horizon_purch)
+                years   = list(range(1, horizon + 1))
+
+                _wca, _wcb = st.columns(2)
+                with _wca:
+                    st.markdown("**Initial Working Capital (Base Month)**")
+                    _wc_items = [
+                        ('Charter Hire Advance', wc.get('charter_advance', 0)),
+                        ('LSFO Bunker',          wc.get('lsfo', 0)),
+                        ('MGO Bunker',           wc.get('mgo', 0)),
+                        ('Port Navigation',      wc.get('port', 0)),
+                        ('Insurance',            wc.get('insurance', 0)),
+                        ('Other Costs',          wc.get('other', 0)),
+                        ('Debtors',              wc.get('debtors', 0)),
+                        ('Less: Creditors',      -wc.get('creditors', 0)),
+                        ('**Total WC Required**', wc['total']),
+                    ]
+                    for label, val in _wc_items:
+                        col_l, col_v = st.columns([2, 1])
+                        col_l.markdown(label)
+                        col_v.markdown(f"**${val:,.0f}**" if '**' in label else f"${val:,.0f}")
+
+                with _wcb:
+                    st.markdown("**Working Capital Schedule (by year)**")
+                    wc_rows = []
+                    for y in years:
+                        oc       = _op_costs(y, _opt_label)
+                        ni_y     = _gross_freight(y)[2]
+                        deb      = ni_y * (_debtor_days / 365)
+                        cred     = oc['total'] * (_creditor_days / 365)
+                        hire_adv = oc['charter_hire'] * (_wc_hire_days / 365) if _opt_label == 'charter' else 0
+                        tot      = max(0, deb - cred + hire_adv)
+                        wc_rows.append({
+                            'Year':        f"Yr {y}",
+                            'Debtors':     f"${deb:,.0f}",
+                            'Creditors':   f"${-cred:,.0f}",
+                            'Hire Advance': f"${hire_adv:,.0f}",
+                            'WC Required': f"${tot:,.0f}",
+                            'Change in WC': f"${tot - wc['total'] if y == 1 else 0:,.0f}",
+                        })
+                    st.dataframe(pd.DataFrame(wc_rows), use_container_width=True, hide_index=True)
+
+    # ════════════════════════════════════════════════════════════════════════════
+    # EXCEL EXPORT
+    # ════════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("**📥 Export Financial Model to Excel**")
+
+    if st.button("Generate Excel Report", key='fm_export_btn', type='primary'):
+        buf = _io.BytesIO()
+        with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment
+            from openpyxl.utils import get_column_letter
+
+            NAVY  = "0A1628"
+            TEAL  = "065A82"
+            WHITE = "FFFFFF"
+            LIGHT = "E2E8F0"
+
+            def _style_ws(ws, title):
+                ws.sheet_view.showGridLines = False
+                ws.insert_rows(1)
+                ws['A1'] = title
+                ws['A1'].font      = Font(bold=True, size=13, color=WHITE)
+                ws['A1'].fill      = PatternFill("solid", fgColor=NAVY)
+                ws['A1'].alignment = Alignment(horizontal='left', vertical='center')
+                ws.row_dimensions[1].height = 28
+                ws.merge_cells(f'A1:{get_column_letter(ws.max_column)}1')
+                for cell in ws[2]:
+                    cell.font      = Font(bold=True, size=10, color=WHITE)
+                    cell.fill      = PatternFill("solid", fgColor=TEAL)
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
+                ws.row_dimensions[2].height = 20
+                for row_idx, row in enumerate(ws.iter_rows(min_row=3), 3):
+                    fill = PatternFill("solid", fgColor="0F2D5E" if row_idx % 2 == 1 else NAVY)
+                    for cell in row:
+                        cell.fill      = fill
+                        cell.font      = Font(size=9, color=LIGHT)
+                        cell.alignment = Alignment(
+                            horizontal='right' if cell.column > 1 else 'left')
+                for col in ws.columns:
+                    max_len = max((len(str(cell.value or '')) for cell in col), default=10)
+                    ws.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 4, 30)
+
+            # Assumptions sheet
+            asm_data = {
+                'Parameter': [
+                    'Tax Rate (%)', 'Op Cost Inflation (%/yr)', 'Freight Growth (%/yr)',
+                    'Days/Year', 'Charter Hire Escalation (%/yr)', 'WACC (%)',
+                    'Charter Horizon (yrs)', 'Purchase Horizon (yrs)',
+                    'Vessel Cost (USD)', 'Vessel Life (yrs)', 'Residual Value (USD)',
+                    'Capital Allowance (%/yr)', 'Capital Allowance Period (yrs)',
+                    'Debt Ratio (%)', 'Interest Rate (%)', 'Grace Period (months)',
+                    'Loan Term (yrs)', 'Dry Dock 1 — Yr / Cost',
+                    'Dry Dock 2 — Yr / Cost', 'Dry Dock 3 — Yr / Cost',
+                    'Debtor Days', 'Creditor Days', 'Hire Advance Days',
+                ],
+                'Value': [
+                    f"{_tax_rate*100:.1f}%",    f"{_op_inflation*100:.2f}%",
+                    f"{_freight_growth*100:.2f}%", f"{_days_year}",
+                    f"{_charter_escl*100:.1f}%",  f"{_wacc*100:.2f}%",
+                    f"{int(_horizon_charter)}",   f"{int(_horizon_purch)}",
+                    f"${_vessel_cost:,.0f}",       f"{_vessel_life}",
+                    f"${_residual_value:,.0f}",    f"{_cap_allow_rate*100:.0f}%",
+                    f"{_cap_allow_yrs}",           f"{_loan_pct*100:.0f}%",
+                    f"{_interest_rate*100:.1f}%",  f"{_grace_months}",
+                    f"{_loan_term_yrs}",
+                    f"Yr {_dd1_yr} / ${_dd1_cost:,.0f}",
+                    f"Yr {_dd2_yr} / ${_dd2_cost:,.0f}",
+                    f"Yr {_dd3_yr} / ${_dd3_cost:,.0f}",
+                    f"{_debtor_days}", f"{_creditor_days}", f"{_wc_hire_days}",
+                ],
+                'Source': ['User input'] * 23,
+            }
+            pd.DataFrame(asm_data).to_excel(writer, sheet_name='Assumptions', index=False)
+            _style_ws(writer.sheets['Assumptions'],
+                      'COMPASS Financial Model — Assumptions')
+
+            # Simulation Year 1 data sheet
+            sim_data = {
+                'Item': [
+                    'Gross Freight', 'Brokerage (3.75%)', 'Net Income',
+                    'Charter Hire', 'LSFO Cost', 'MGO Cost', 'Total Bunker',
+                    'Port Costs', 'Insurance', 'Other Costs', 'Total Expenses',
+                    'Net Profit', 'Total Days', 'Voyages', 'Cargo MT', 'Avg TCE',
+                ],
+                'Value (USD)': [
+                    _SIM['gross_freight'], _SIM['brokerage'],   _SIM['net_income'],
+                    _SIM['charter_hire'],  _SIM['lsfo_cost'],   _SIM['mgo_cost'],
+                    _SIM['bunker_cost'],   _SIM['port_costs'],  _SIM['insurance'],
+                    _SIM['other_costs'],   _SIM['total_expenses'],
+                    _SIM['total_profit'],  _SIM['total_days'],
+                    _SIM['n_voyages'],     _SIM['total_cargo_mt'], _SIM['avg_tce'],
+                ],
+            }
+            pd.DataFrame(sim_data).to_excel(writer, sheet_name='Simulation Y1', index=False)
+            _style_ws(writer.sheets['Simulation Y1'],
+                      'COMPASS — Simulation Year 1 Actuals')
+
+            for opt, label, horizon in [
+                ('charter',  'Income Stmt (Charter)',  int(_horizon_charter)),
+                ('purchase', 'Income Stmt (Purchase)', int(_horizon_purch)),
+            ]:
+                df_is = _build_income_statement(opt, horizon)
+                df_is.to_excel(writer, sheet_name=label, index=False)
+                _style_ws(writer.sheets[label],
+                          f'COMPASS — Income Statement ({opt.title()} Option)')
+
+            for opt, label, horizon in [
+                ('charter',  'Cashflow (Charter)',  int(_horizon_charter)),
+                ('purchase', 'Cashflow (Purchase)', int(_horizon_purch)),
+            ]:
+                df_cf = _build_cashflow(opt, horizon)
+                df_cf.to_excel(writer, sheet_name=label, index=False)
+                _style_ws(writer.sheets[label],
+                          f'COMPASS — Cashflow Statement ({opt.title()} Option)')
+
+            for opt, label, horizon in [
+                ('charter',  'Op Costs (Charter)',  int(_horizon_charter)),
+                ('purchase', 'Op Costs (Purchase)', int(_horizon_purch)),
+            ]:
+                df_oc = _build_opcosts(opt, horizon)
+                df_oc.to_excel(writer, sheet_name=label, index=False)
+                _style_ws(writer.sheets[label],
+                          f'COMPASS — Operating Costs ({opt.title()} Option)')
+
+        st.download_button(
+            label="📥 Download Financial Model Excel",
+            data=buf.getvalue(),
+            file_name="COMPASS_Financial_Model.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
 

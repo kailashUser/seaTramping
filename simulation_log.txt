@@ -3,11 +3,11 @@
 ───────────────────────────────────────────────────────────────────
 
 ── SIMULATION RUN LOG ───────────────────────────────────────────
-Timestamp: 2026-05-12 09:35:46
+Timestamp: 2026-05-18 19:58:50
 Iterations: 1,000
 Algorithm: Monte Carlo Only
 Random seed: None (random)
-Duration: 170.3 seconds
+Duration: 164.7 seconds
 
 ── VESSEL CONFIG ────────────────────────────────────────────────
 DWT: 23,564 MT
@@ -33,211 +33,185 @@ Final routes used: 3,395
 Categories: Coal (1,352 = 39.8%), Dry Bulk (963 = 28.4%), Steel/Metal (457 = 13.5%), Agri-Bulk (420 = 12.4%), Fertilizers (203 = 6.0%)
 
 ── SIMULATION RESULTS ───────────────────────────────────────────
-Best programme profit: $4,694,521
-Mean profit (all iters): $3,185,238
-P10 (worst 10%): $2,694,728
-P90 (best 10%): $3,734,928
+Best programme profit: $4,553,859
+Mean profit (all iters): $3,173,555
+P10 (worst 10%): $2,675,131
+P90 (best 10%): $3,710,372
 % Profitable programmes: 100.0%
-Mean TCE: $20,109/day
-Mean ballast ratio (top progs): 15.5%
+Mean TCE: $20,072/day
+Mean ballast ratio (top progs): 15.3%
 
 ── TOP PROGRAMME #1 ─────────────────────────────────────────────
-Total profit: $4,694,521
-Voyages: 31
-TCE: $24,938/day
-Ballast ratio: 17.3%
+Total profit: $4,553,859
+Voyages: 27
+TCE: $24,732/day
+Ballast ratio: 13.1%
 Algorithm: monte_carlo
 
-  Voyage 1: Son Duong → Binh Thuan (Vinh Tan) | Palm Kernel Expeller | 20,029 MT
-    Laden:   580 NM | 2.2 days | Freight: $14.95/MT | Revenue: $299,351
-    Ballast: 12 NM | 0.0 days | Ballast cost: $736
-    P&L: $141,577 | Charter hire: $72,000 | Bunker: $29,683
+  Voyage 1: Lumut (Malaysia) → Bahudopi | Palm Kernel Expeller | 20,029 MT
+    Laden:   1,321 NM | 5.0 days | Freight: $23.72/MT | Revenue: $475,002
+    Ballast: 169 NM | 0.6 days | Ballast cost: $10,483
+    P&L: $258,414 | Charter hire: $99,000 | Bunker: $61,576
 
-  Voyage 2: Dung Quat → Binh Thuan (Vinh Tan) | Steels | 16,023 MT
-    Laden:   243 NM | 0.9 days | Freight: $15.65/MT | Revenue: $250,698
-    Ballast: 243 NM | 0.9 days | Ballast cost: $15,056
-    P&L: $83,912 | Charter hire: $85,500 | Bunker: $26,020
+  Voyage 2: Bahudopi → Dung Quat | Steels | 16,023 MT
+    Laden:   1,375 NM | 5.2 days | Freight: $24.50/MT | Revenue: $392,632
+    Ballast: 0 NM | 0.0 days | Ballast cost: $0
+    P&L: $165,685 | Charter hire: $112,500 | Bunker: $60,524
     Hold cleaning: Palm Kernel Expeller -> Steels → $1,000
 
-  Voyage 3: Koh Sichang → Dung Quat | Palm Kernel Expeller | 20,029 MT
-    Laden:   482 NM | 1.8 days | Freight: $17.26/MT | Revenue: $345,755
-    Ballast: 468 NM | 1.7 days | Ballast cost: $28,981
-    P&L: $165,653 | Charter hire: $85,500 | Bunker: $39,466
+  Voyage 3: Vissai International Port → Naga (Cebu) | Clinker | 20,029 MT
+    Laden:   1,231 NM | 4.7 days | Freight: $17.71/MT | Revenue: $354,739
+    Ballast: 73 NM | 0.3 days | Ballast cost: $4,524
+    P&L: $149,035 | Charter hire: $94,500 | Bunker: $54,487
+    Hold cleaning: Steels -> Clinker → $1,000
+
+  Voyage 4: Davao → Phu My | Sugar | 20,029 MT
+    Laden:   1,125 NM | 4.3 days | Freight: $20.41/MT | Revenue: $408,891
+    Ballast: 219 NM | 0.8 days | Ballast cost: $13,565
+    P&L: $154,290 | Charter hire: $126,000 | Bunker: $55,854
+    Hold cleaning: Clinker -> Sugar → $15,000
+
+  Voyage 5: Binh Thuan (Vinh Tan) → Cai Mep | Steels | 16,023 MT
+    Laden:   105 NM | 0.4 days | Freight: $16.21/MT | Revenue: $259,711
+    Ballast: 104 NM | 0.4 days | Ballast cost: $6,411
+    P&L: $108,449 | Charter hire: $76,500 | Bunker: $16,927
+    Hold cleaning: Sugar -> Steels → $1,000
+
+  Voyage 6: Ho Chi Minh City → Khanh Hoa | Palm Kernel Expeller | 20,029 MT
+    Laden:   163 NM | 0.6 days | Freight: $13.36/MT | Revenue: $267,676
+    Ballast: 25 NM | 0.1 days | Ballast cost: $1,522
+    P&L: $126,239 | Charter hire: $67,500 | Bunker: $14,866
     Hold cleaning: Steels -> Palm Kernel Expeller → $1,000
 
-  Voyage 4: Ho Chi Minh City → Khanh Hoa | Palm Kernel Expeller | 20,029 MT
-    Laden:   163 NM | 0.6 days | Freight: $13.12/MT | Revenue: $262,846
-    Ballast: 303 NM | 1.1 days | Ballast cost: $18,731
-    P&L: $119,418 | Charter hire: $63,000 | Bunker: $22,934
+  Voyage 7: Ho Chi Minh City → Chittagong | Palm Kernel Expeller | 20,029 MT
+    Laden:   1,100 NM | 4.2 days | Freight: $19.42/MT | Revenue: $388,996
+    Ballast: 163 NM | 0.6 days | Ballast cost: $10,105
+    P&L: $163,521 | Charter hire: $99,000 | Bunker: $53,552
 
-  Voyage 5: Ho Chi Minh City → Jakarta (Tanjung Priok) | Palm Kernel Expeller | 20,029 MT
-    Laden:   1,014 NM | 3.8 days | Freight: $21.17/MT | Revenue: $423,981
-    Ballast: 163 NM | 0.6 days | Ballast cost: $10,101
-    P&L: $218,500 | Charter hire: $90,000 | Bunker: $50,097
-
-  Voyage 6: Kuantan → Chittagong | Palm Kernel Expeller | 20,029 MT
-    Laden:   1,293 NM | 4.9 days | Freight: $22.06/MT | Revenue: $441,919
-    Ballast: 679 NM | 2.5 days | Ballast cost: $41,983
-    P&L: $177,801 | Charter hire: $117,000 | Bunker: $75,519
-
-  Voyage 7: Chittagong → Laem Chabang | Fertilizers | 20,029 MT
-    Laden:   2,170 NM | 8.2 days | Freight: $24.26/MT | Revenue: $485,945
+  Voyage 8: Chittagong → Laem Chabang | Fertilizers | 20,029 MT
+    Laden:   2,170 NM | 8.2 days | Freight: $25.32/MT | Revenue: $507,055
     Ballast: 0 NM | 0.0 days | Ballast cost: $0
-    P&L: $183,129 | Charter hire: $135,000 | Bunker: $87,871
+    P&L: $202,736 | Charter hire: $135,000 | Bunker: $88,033
     Hold cleaning: Palm Kernel Expeller -> Fertilizers → $3,000
 
-  Voyage 8: Map Ta Phut → Villanueva (Mindanao Island) | Palm Kernel Expeller | 20,029 MT
-    Laden:   1,414 NM | 5.4 days | Freight: $22.61/MT | Revenue: $452,796
-    Ballast: 28 NM | 0.1 days | Ballast cost: $1,707
-    P&L: $219,227 | Charter hire: $108,000 | Bunker: $60,724
+  Voyage 9: Koh Sichang → Bontang | Palm Kernel Expeller | 20,029 MT
+    Laden:   2,891 NM | 10.9 days | Freight: $34.51/MT | Revenue: $691,282
+    Ballast: 6 NM | 0.0 days | Ballast cost: $347
+    P&L: $350,509 | Charter hire: $162,000 | Bunker: $114,460
     Hold cleaning: Fertilizers -> Palm Kernel Expeller → $3,000
 
-  Voyage 9: Toledo (Philippines) → Davao | Fertilizers | 20,029 MT
-    Laden:   232 NM | 0.9 days | Freight: $12.41/MT | Revenue: $248,609
-    Ballast: 127 NM | 0.5 days | Ballast cost: $7,868
-    P&L: $103,775 | Charter hire: $72,000 | Bunker: $20,264
+  Voyage 10: Bontang → Muara Banyuasin | Fertilizers | 20,029 MT
+    Laden:   777 NM | 2.9 days | Freight: $15.34/MT | Revenue: $307,332
+    Ballast: 0 NM | 0.0 days | Ballast cost: $0
+    P&L: $133,550 | Charter hire: $90,000 | Bunker: $36,677
     Hold cleaning: Palm Kernel Expeller -> Fertilizers → $3,000
 
-  Voyage 10: General Santos City → Phuoc An | Copra | 20,029 MT
-    Laden:   1,113 NM | 4.2 days | Freight: $23.17/MT | Revenue: $464,161
-    Ballast: 64 NM | 0.2 days | Ballast cost: $3,934
-    P&L: $257,499 | Charter hire: $94,500 | Bunker: $50,738
-    Hold cleaning: Fertilizers -> Copra → $1,000
-
-  Voyage 11: Ho Chi Minh City → Khanh Hoa | Palm Kernel Expeller | 20,029 MT
-    Laden:   163 NM | 0.6 days | Freight: $10.80/MT | Revenue: $216,213
-    Ballast: 20 NM | 0.1 days | Ballast cost: $1,212
-    P&L: $86,318 | Charter hire: $58,500 | Bunker: $14,651
-    Hold cleaning: Copra -> Palm Kernel Expeller → $1,000
-
-  Voyage 12: Cai Mep → Ha Long | Sugar | 20,029 MT
-    Laden:   627 NM | 2.4 days | Freight: $16.66/MT | Revenue: $333,666
-    Ballast: 159 NM | 0.6 days | Ballast cost: $9,823
-    P&L: $154,036 | Charter hire: $85,500 | Bunker: $35,753
-    Hold cleaning: Palm Kernel Expeller -> Sugar → $1,000
-
-  Voyage 13: Son Duong → Naga (Cebu) | Palm Kernel Expeller | 20,029 MT
-    Laden:   1,164 NM | 4.4 days | Freight: $18.98/MT | Revenue: $380,135
-    Ballast: 12 NM | 0.0 days | Ballast cost: $736
-    P&L: $177,167 | Charter hire: $94,500 | Bunker: $51,119
-    Hold cleaning: Sugar -> Palm Kernel Expeller → $1,000
-
-  Voyage 14: Phuoc An → Chittagong | Rice | 20,029 MT
-    Laden:   1,119 NM | 4.2 days | Freight: $22.47/MT | Revenue: $449,992
-    Ballast: 990 NM | 3.6 days | Ballast cost: $61,271
-    P&L: $156,305 | Charter hire: $139,500 | Bunker: $78,286
-    Hold cleaning: Palm Kernel Expeller -> Rice → $4,000
-
-  Voyage 15: Chittagong → Muara Banyuasin | Fertilizers | 20,029 MT
-    Laden:   1,666 NM | 6.3 days | Freight: $20.00/MT | Revenue: $400,481
-    Ballast: 0 NM | 0.0 days | Ballast cost: $0
-    P&L: $153,546 | Charter hire: $112,500 | Bunker: $69,357
-    Hold cleaning: Rice -> Fertilizers → $1,500
-
-  Voyage 16: Kuantan → Davao | Palm Kernel Expeller | 20,029 MT
-    Laden:   1,537 NM | 5.8 days | Freight: $19.03/MT | Revenue: $381,245
-    Ballast: 388 NM | 1.4 days | Ballast cost: $24,001
-    P&L: $119,134 | Charter hire: $126,000 | Bunker: $75,796
-    Hold cleaning: Fertilizers -> Palm Kernel Expeller → $3,000
-
-  Voyage 17: Davao → Bahudopi | Sugar | 20,029 MT
-    Laden:   1,035 NM | 3.9 days | Freight: $13.28/MT | Revenue: $265,920
-    Ballast: 0 NM | 0.0 days | Ballast cost: $0
-    P&L: $78,315 | Charter hire: $94,500 | Bunker: $46,043
-    Hold cleaning: Palm Kernel Expeller -> Sugar → $1,000
-
-  Voyage 18: Bahudopi → Chittagong | Scrap | 20,029 MT
-    Laden:   2,886 NM | 10.9 days | Freight: $30.89/MT | Revenue: $618,644
-    Ballast: 0 NM | 0.0 days | Ballast cost: $0
-    P&L: $264,741 | Charter hire: $166,500 | Bunker: $115,105
-    Hold cleaning: Sugar -> Scrap → $1,000
-
-  Voyage 19: Chittagong → Limay | Fertilizers | 20,029 MT
-    Laden:   2,731 NM | 10.3 days | Freight: $29.44/MT | Revenue: $589,621
-    Ballast: 0 NM | 0.0 days | Ballast cost: $0
-    P&L: $254,534 | Charter hire: $148,500 | Bunker: $108,449
-    Hold cleaning: Scrap -> Fertilizers → $1,000
-
-  Voyage 20: Davao → Ho Chi Minh City | Copra | 20,029 MT
-    Laden:   1,144 NM | 4.3 days | Freight: $19.82/MT | Revenue: $397,027
-    Ballast: 537 NM | 1.9 days | Ballast cost: $33,236
-    P&L: $157,060 | Charter hire: $112,500 | Bunker: $65,789
-    Hold cleaning: Fertilizers -> Copra → $1,000
-
-  Voyage 21: Phu My → Laem Chabang | Fertilizers | 20,029 MT
-    Laden:   390 NM | 1.5 days | Freight: $13.36/MT | Revenue: $267,618
-    Ballast: 21 NM | 0.1 days | Ballast cost: $1,287
-    P&L: $118,488 | Charter hire: $67,500 | Bunker: $22,958
-    Hold cleaning: Copra -> Fertilizers → $1,000
-
-  Voyage 22: Koh Sichang → Phuoc An | Sugar | 20,029 MT
-    Laden:   394 NM | 1.5 days | Freight: $11.18/MT | Revenue: $223,854
-    Ballast: 6 NM | 0.0 days | Ballast cost: $346
-    P&L: $76,625 | Charter hire: $72,000 | Bunker: $22,664
+  Voyage 11: Port Kelang → Manila | Sugar | 20,029 MT
+    Laden:   1,478 NM | 5.6 days | Freight: $25.87/MT | Revenue: $518,077
+    Ballast: 381 NM | 1.4 days | Ballast cost: $23,583
+    P&L: $237,635 | Charter hire: $126,000 | Bunker: $73,679
     Hold cleaning: Fertilizers -> Sugar → $3,000
 
-  Voyage 23: Koh Sichang → Davao | Palm Kernel Expeller | 20,029 MT
-    Laden:   1,511 NM | 5.7 days | Freight: $19.99/MT | Revenue: $400,438
-    Ballast: 394 NM | 1.4 days | Ballast cost: $24,347
-    P&L: $148,607 | Charter hire: $121,500 | Bunker: $74,991
+  Voyage 12: Toledo (Philippines) → Muara Banyuasin | Fertilizers | 20,029 MT
+    Laden:   1,549 NM | 5.9 days | Freight: $18.89/MT | Revenue: $378,419
+    Ballast: 297 NM | 1.1 days | Ballast cost: $18,361
+    P&L: $125,706 | Charter hire: $126,000 | Bunker: $73,664
+    Hold cleaning: Sugar -> Fertilizers → $3,000
+
+  Voyage 13: Port Kelang → Mariveles | Steels | 16,023 MT
+    Laden:   1,450 NM | 5.5 days | Freight: $27.90/MT | Revenue: $447,028
+    Ballast: 381 NM | 1.4 days | Ballast cost: $23,583
+    P&L: $174,397 | Charter hire: $130,500 | Bunker: $74,461
+    Hold cleaning: Fertilizers -> Steels → $1,000
+
+  Voyage 14: Davao → Ha Long | Sugar | 20,029 MT
+    Laden:   1,362 NM | 5.2 days | Freight: $19.33/MT | Revenue: $387,197
+    Ballast: 536 NM | 1.9 days | Ballast cost: $33,194
+    P&L: $134,840 | Charter hire: $121,500 | Bunker: $73,860
+    Hold cleaning: Steels -> Sugar → $1,000
+
+  Voyage 15: Son Duong → Limay | Palm Kernel Expeller | 20,029 MT
+    Laden:   870 NM | 3.3 days | Freight: $14.18/MT | Revenue: $284,070
+    Ballast: 12 NM | 0.0 days | Ballast cost: $736
+    P&L: $101,295 | Charter hire: $85,500 | Bunker: $40,399
     Hold cleaning: Sugar -> Palm Kernel Expeller → $1,000
 
-  Voyage 24: Davao → Villanueva (Mindanao Island) | Sugar | 20,029 MT
-    Laden:   105 NM | 0.4 days | Freight: $8.61/MT | Revenue: $172,474
-    Ballast: 0 NM | 0.0 days | Ballast cost: $0
-    P&L: $54,383 | Charter hire: $58,500 | Bunker: $11,876
+  Voyage 16: Davao → Chittagong | Sugar | 20,029 MT
+    Laden:   2,811 NM | 10.6 days | Freight: $30.14/MT | Revenue: $603,659
+    Ballast: 537 NM | 1.9 days | Ballast cost: $33,249
+    P&L: $223,581 | Charter hire: $175,500 | Bunker: $127,288
     Hold cleaning: Palm Kernel Expeller -> Sugar → $1,000
 
-  Voyage 25: Davao → Jakarta (Tanjung Priok) | Sugar | 20,029 MT
-    Laden:   1,443 NM | 5.5 days | Freight: $17.61/MT | Revenue: $352,767
-    Ballast: 105 NM | 0.4 days | Ballast cost: $6,470
-    P&L: $122,598 | Charter hire: $108,000 | Bunker: $64,075
-
-  Voyage 26: Lumut (Malaysia) → Pulau Laut | Palm Kernel Expeller | 20,029 MT
-    Laden:   756 NM | 2.9 days | Freight: $15.92/MT | Revenue: $318,868
-    Ballast: 752 NM | 2.7 days | Ballast cost: $46,530
-    P&L: $103,432 | Charter hire: $103,500 | Bunker: $57,808
+  Voyage 17: Lumut (Malaysia) → Naga (Cebu) | Palm Kernel Expeller | 20,029 MT
+    Laden:   1,576 NM | 6.0 days | Freight: $21.11/MT | Revenue: $422,752
+    Ballast: 1,201 NM | 4.4 days | Ballast cost: $74,309
+    P&L: $113,856 | Charter hire: $148,500 | Bunker: $101,129
     Hold cleaning: Sugar -> Palm Kernel Expeller → $1,000
 
-  Voyage 27: Pulau Laut → Iloilo City | Steam Coal | 20,029 MT
-    Laden:   1,278 NM | 4.8 days | Freight: $16.78/MT | Revenue: $336,161
-    Ballast: 0 NM | 0.0 days | Ballast cost: $0
-    P&L: $136,092 | Charter hire: $94,500 | Bunker: $53,064
-    Hold cleaning: Palm Kernel Expeller -> Steam Coal → $1,500
-
-  Voyage 28: Lumut (Malaysia) → Koh Sichang | Palm Kernel Expeller | 20,029 MT
-    Laden:   986 NM | 3.7 days | Freight: $22.23/MT | Revenue: $445,300
-    Ballast: 1,523 NM | 5.5 days | Ballast cost: $94,229
-    P&L: $151,642 | Charter hire: $144,000 | Bunker: $88,788
-    Hold cleaning: Steam Coal -> Palm Kernel Expeller → $3,000
-
-  Voyage 29: Siam Seaport → Davao | Fertilizers | 20,029 MT
-    Laden:   1,504 NM | 5.7 days | Freight: $23.09/MT | Revenue: $462,521
-    Ballast: 6 NM | 0.0 days | Ballast cost: $377
-    P&L: $228,640 | Charter hire: $108,000 | Bunker: $63,443
+  Voyage 18: Toledo (Philippines) → Bahudopi | Fertilizers | 20,029 MT
+    Laden:   1,039 NM | 3.9 days | Freight: $17.07/MT | Revenue: $341,898
+    Ballast: 13 NM | 0.0 days | Ballast cost: $786
+    P&L: $145,063 | Charter hire: $99,000 | Bunker: $46,624
     Hold cleaning: Palm Kernel Expeller -> Fertilizers → $3,000
 
-  Voyage 30: Davao → General Santos City | Copra | 20,029 MT
-    Laden:   64 NM | 0.2 days | Freight: $9.05/MT | Revenue: $181,322
+  Voyage 19: Bahudopi → Siam Seaport | Steels | 16,023 MT
+    Laden:   2,644 NM | 10.0 days | Freight: $32.55/MT | Revenue: $521,488
     Ballast: 0 NM | 0.0 days | Ballast cost: $0
-    P&L: $63,481 | Charter hire: $58,500 | Bunker: $10,372
-    Hold cleaning: Fertilizers -> Copra → $1,000
+    P&L: $199,030 | Charter hire: $157,500 | Bunker: $107,140
+    Hold cleaning: Fertilizers -> Steels → $1,000
 
-  Voyage 31: Davao → Cai Mep | Copra | 20,029 MT
-    Laden:   1,123 NM | 4.3 days | Freight: $21.00/MT | Revenue: $420,665
-    Ballast: 64 NM | 0.2 days | Ballast cost: $3,934
-    P&L: $218,884 | Charter hire: $90,000 | Bunker: $51,140
+  Voyage 20: Ho Chi Minh City → Jakarta (Tanjung Priok) | Palm Kernel Expeller | 20,029 MT
+    Laden:   1,014 NM | 3.8 days | Freight: $16.92/MT | Revenue: $338,824
+    Ballast: 368 NM | 1.3 days | Ballast cost: $22,773
+    P&L: $115,520 | Charter hire: $103,500 | Bunker: $56,192
+    Hold cleaning: Steels -> Palm Kernel Expeller → $1,000
+
+  Voyage 21: Tuban → Sihanoukville | Clinker | 20,029 MT
+    Laden:   1,173 NM | 4.4 days | Freight: $17.00/MT | Revenue: $340,422
+    Ballast: 304 NM | 1.1 days | Ballast cost: $18,837
+    P&L: $113,258 | Charter hire: $112,500 | Bunker: $59,167
+    Hold cleaning: Palm Kernel Expeller -> Clinker → $5,000
+
+  Voyage 22: Binh Thuan (Vinh Tan) → Payra | Clinker | 20,029 MT
+    Laden:   2,137 NM | 8.1 days | Freight: $29.20/MT | Revenue: $584,784
+    Ballast: 302 NM | 1.1 days | Ballast cost: $18,719
+    P&L: $284,281 | Charter hire: $135,000 | Bunker: $94,604
+
+  Voyage 23: Chittagong → Koh Sichang | Steam Coal | 20,029 MT
+    Laden:   2,175 NM | 8.2 days | Freight: $22.36/MT | Revenue: $447,758
+    Ballast: 90 NM | 0.3 days | Ballast cost: $5,588
+    P&L: $158,247 | Charter hire: $130,500 | Bunker: $88,940
+    Hold cleaning: Clinker -> Steam Coal → $1,500
+
+  Voyage 24: Map Ta Phut → Campha | Palm Kernel Expeller | 20,029 MT
+    Laden:   610 NM | 2.3 days | Freight: $13.76/MT | Revenue: $275,657
+    Ballast: 33 NM | 0.1 days | Ballast cost: $2,048
+    P&L: $103,636 | Charter hire: $81,000 | Bunker: $31,523
+    Hold cleaning: Steam Coal -> Palm Kernel Expeller → $3,000
+
+  Voyage 25: Son Duong → Kuantan | Palm Kernel Expeller | 20,029 MT
+    Laden:   1,034 NM | 3.9 days | Freight: $19.55/MT | Revenue: $391,521
+    Ballast: 26 NM | 0.1 days | Ballast cost: $1,603
+    P&L: $194,780 | Charter hire: $90,000 | Bunker: $46,835
+
+  Voyage 26: Lumut (Malaysia) → Binh Thuan (Vinh Tan) | Palm Kernel Expeller | 20,029 MT
+    Laden:   931 NM | 3.5 days | Freight: $18.38/MT | Revenue: $368,044
+    Ballast: 169 NM | 0.6 days | Ballast cost: $10,483
+    P&L: $171,762 | Charter hire: $90,000 | Bunker: $47,257
+
+  Voyage 27: Map Ta Phut → Pulau Laut | Palm Kernel Expeller | 20,029 MT
+    Laden:   1,122 NM | 4.3 days | Freight: $18.63/MT | Revenue: $373,153
+    Ballast: 443 NM | 1.6 days | Ballast cost: $27,433
+    P&L: $144,542 | Charter hire: $108,000 | Bunker: $62,331
 
 
 ── CARGO MIX (top programme #1) ─────────────────────────────────
-  Palm Kernel Expeller          12 voyages (38.7%)
-  Fertilizers                    6 voyages (19.4%)
-  Sugar                          5 voyages (16.1%)
-  Copra                          4 voyages (12.9%)
-  Steels                         1 voyages (3.2%)
-  Rice                           1 voyages (3.2%)
-  Scrap                          1 voyages (3.2%)
-  Steam Coal                     1 voyages (3.2%)
+  Palm Kernel Expeller          11 voyages (40.7%)
+  Steels                         4 voyages (14.8%)
+  Sugar                          4 voyages (14.8%)
+  Fertilizers                    4 voyages (14.8%)
+  Clinker                        3 voyages (11.1%)
+  Steam Coal                     1 voyages (3.7%)
 
 ── DISTANCE MATRIX ──────────────────────────────────────────────
   Source: Searoute EU maritime routing network (real sea distances)
@@ -247,5 +221,5 @@ Algorithm: monte_carlo
   No errors or warnings recorded.
 
 ───────────────────────────────────────────────────────────────────
-  Log generated: 2026-05-12 09:35:46
+  Log generated: 2026-05-18 19:58:50
 ───────────────────────────────────────────────────────────────────
