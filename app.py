@@ -18,7 +18,7 @@ import requests
 import re
 
 # ── Live data helpers ──────────────────────────────────────────────────────────
-VESSEL_API_KEY  = "86231bda2f1b18af2ef3a6eaac09722c63dee57d9138d93eab0a7b5e4dfb81fd"
+VESSEL_API_KEY  = "755c81941702bb06b31b70c9d18ac70551f79ed3fa2bb0eb6636ace5e5dff4f6"
 VESSEL_API_BASE = "https://api.vesselapi.com/v1"
 
 
