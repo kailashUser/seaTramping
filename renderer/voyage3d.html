@@ -1,0 +1,1002 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SEA Tramping — Voyage 3D</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { height:100%; background:#040910; overflow:hidden;
+              font-family:'Segoe UI',system-ui,sans-serif; color:#e8eef6; }
+  #out { position:fixed; inset:0; width:100%; height:100%; }
+  canvas { display:block; }
+
+  /* ── HUD ─────────────────────────────────────────────────────────── */
+  .hud { display:none; position:fixed; pointer-events:none; text-shadow:0 1px 6px rgba(0,0,0,.9); }
+
+  #hud-top { top:0; left:0; right:0; padding:22px 28px;
+             background:linear-gradient(180deg,rgba(2,8,16,.88),transparent); }
+  #vessel-name { font-size:22px; font-weight:700; letter-spacing:.06em; }
+  #vessel-sub  { font-size:12px; color:#8aa2bd; margin-top:3px; letter-spacing:.09em; }
+
+  #hud-clock { position:fixed; top:22px; right:28px; text-align:right; }
+  #day       { font-size:40px; font-weight:200; line-height:1; font-variant-numeric:tabular-nums; }
+  #day span  { font-size:14px; color:#8aa2bd; font-weight:400; }
+  #date      { font-size:12px; color:#8aa2bd; letter-spacing:.12em; margin-top:5px; }
+
+  #hud-status { position:fixed; left:28px; bottom:26px; }
+  #status-pill { display:inline-block; font-size:11px; font-weight:700; letter-spacing:.14em;
+                 padding:5px 13px; border-radius:20px; margin-bottom:11px; }
+  .st-laden     { background:#065f46; color:#6ee7b7; }
+  .st-ballast   { background:#78350f; color:#fcd34d; }
+  .st-load      { background:#1e3a8a; color:#93c5fd; }
+  .st-discharge { background:#581c87; color:#d8b4fe; }
+  #leg-route { font-size:26px; font-weight:600; }
+  #leg-cargo { font-size:13px; color:#9fb4cc; margin-top:5px; }
+
+  #hud-money { position:fixed; right:28px; bottom:26px; text-align:right; }
+  #profit      { font-size:32px; font-weight:300; font-variant-numeric:tabular-nums; }
+  #profit-lbl  { font-size:11px; color:#8aa2bd; letter-spacing:.13em; margin-top:3px; }
+  #voyage-lbl  { font-size:12px; color:#8aa2bd; margin-top:9px; letter-spacing:.06em; }
+
+  /* progress bar */
+  #bar { position:fixed; left:0; right:0; bottom:0; height:3px; background:rgba(255,255,255,.09); }
+  #bar-fill { height:100%; width:0; background:linear-gradient(90deg,#0ea5e9,#22d3ee); }
+
+  /* minimap */
+  #minimap { position:fixed; left:28px; top:96px; width:230px; height:190px;
+             border:1px solid rgba(255,255,255,.13); border-radius:7px;
+             background:rgba(3,10,20,.62); }
+
+  /* controls (hidden while recording) */
+  #ctl { position:fixed; left:50%; transform:translateX(-50%); bottom:22px;
+         display:flex; gap:9px; align-items:center; pointer-events:auto; }
+  #ctl button { background:rgba(15,32,52,.9); color:#cfe0f2; border:1px solid rgba(255,255,255,.16);
+                padding:7px 15px; border-radius:6px; font-size:12px; cursor:pointer; }
+  #ctl button:hover { background:rgba(28,55,86,.95); }
+  #scrub { width:290px; }
+  #loading { position:fixed; inset:0; display:grid; place-items:center;
+             background:#040910; font-size:13px; color:#7f97b2; letter-spacing:.1em; z-index:10; }
+</style>
+
+<canvas id="out"></canvas>
+
+<div id="loading">LOADING VOYAGE…</div>
+
+<div class="hud" id="hud-top">
+  <div id="vessel-name">—</div>
+  <div id="vessel-sub">—</div>
+</div>
+<div class="hud" id="hud-clock">
+  <div id="day">0<span>&nbsp;/ 0 DAYS</span></div>
+  <div id="date">—</div>
+</div>
+<canvas class="hud" id="minimap" width="460" height="380"></canvas>
+<div class="hud" id="hud-status">
+  <div id="status-pill" class="st-laden">—</div>
+  <div id="leg-route">—</div>
+  <div id="leg-cargo">—</div>
+</div>
+<div class="hud" id="hud-money">
+  <div id="profit">$0</div>
+  <div id="profit-lbl">CUMULATIVE P&amp;L</div>
+  <div id="voyage-lbl">—</div>
+</div>
+<div id="bar"><div id="bar-fill"></div></div>
+
+<div id="ctl">
+  <button id="btn-play">❚❚</button>
+  <input type="range" id="scrub" min="0" max="1000" value="0">
+  <button id="btn-cam">CAM: AUTO</button>
+  <button id="btn-rec">● REC</button>
+</div>
+
+<script type="module">
+import * as THREE from './vendor/three.module.js';
+import { drawHUD, drawMinimap } from './hud.js';
+
+// ── Load data ──────────────────────────────────────────────────────────────
+const qs = new URLSearchParams(location.search);
+const timelineUrl = qs.get('timeline') || './data/timeline_dev.json';
+
+const [TL, LAND] = await Promise.all([
+  fetch(timelineUrl).then(r => r.json()),
+  fetch('./data/ne_50m_land.geojson').then(r => r.json()),
+]);
+
+const META = TL.meta, SEGS = TL.segments, VOY = TL.voyages;
+const TOTAL_DAYS = META.total_days;
+
+// ── Projection: local equirectangular, 1 unit = 1 km ───────────────────────
+const lats = Object.values(TL.ports).map(p => p.lat);
+const lons = Object.values(TL.ports).map(p => p.lon);
+const LAT0 = (Math.min(...lats) + Math.max(...lats)) / 2;
+const LON0 = (Math.min(...lons) + Math.max(...lons)) / 2;
+const KX = 111.32 * Math.cos(LAT0 * Math.PI / 180), KZ = 110.57;
+
+const px = lon => (lon - LON0) * KX;
+const pz = lat => -(lat - LAT0) * KZ;
+
+// ── Scene ──────────────────────────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x27567a, 0.00035);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.05, 40000);
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x27567a);
+// The WebGL canvas stays offscreen; every frame is blitted into #out and the
+// HUD drawn on top, so what you see is exactly what gets recorded.
+const out = document.getElementById('out');
+const octx = out.getContext('2d');
+
+scene.add(new THREE.HemisphereLight(0xbcd9f2, 0x16324a, 1.5));
+const sun = new THREE.DirectionalLight(0xffe9c4, 2.6);
+sun.position.set(-900, 1400, 700);
+scene.add(sun);
+scene.add(new THREE.AmbientLight(0x3f5f7f, 0.7));
+
+// Sky dome: a large inverted sphere with a dusk gradient. Gives the high
+// shots a horizon instead of flat clear-colour, and lifts the whole palette.
+{
+  const sky = new THREE.Mesh(
+    new THREE.SphereGeometry(18000, 64, 48),
+    new THREE.ShaderMaterial({
+      side: THREE.BackSide, depthWrite: false,
+      uniforms: {
+        uTop: { value: new THREE.Color(0x0b2138) },
+        uMid: { value: new THREE.Color(0x2d5f86) },
+        uHor: { value: new THREE.Color(0xd9a273) },
+      },
+      vertexShader: `varying vec3 vP; void main(){ vP = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+      fragmentShader: `uniform vec3 uTop,uMid,uHor; varying vec3 vP;
+        void main(){
+          float h = normalize(vP).y;
+          vec3 c = mix(uHor, uMid, smoothstep(-0.004, 0.16, h));
+          c = mix(c, uTop, smoothstep(0.10, 0.95, h));
+          gl_FragColor = vec4(c, 1.0);
+        }`,
+    }));
+  sky.frustumCulled = false;
+  scene.add(sky);
+}
+
+// ── Ocean: Gerstner waves, plane re-centred on the vessel each frame ───────
+// Two-tier sea. The near plane carries the wave displacement and must be
+// small enough that its quads resolve the wavelengths (~30 m quads for a
+// 200 m swell); the far plane is flat and only fills out to the horizon.
+const OCEAN_SIZE = 16;                       // km across, follows the vessel
+const oceanGeo = new THREE.PlaneGeometry(OCEAN_SIZE, OCEAN_SIZE, 512, 512);
+oceanGeo.rotateX(-Math.PI / 2);
+
+const oceanMat = new THREE.ShaderMaterial({
+  uniforms: {
+    uTime:   { value: 0 },
+    uOrigin: { value: new THREE.Vector2() },
+    uAmp:    { value: 1.0 },      // scaled down when the camera is high
+    uScale:  { value: 1.0 },      // mesh scale, so wavelengths stay physical
+    uDeep:   { value: new THREE.Color(0x0d3552) },
+    uShallow:{ value: new THREE.Color(0x2f86b4) },
+    uCrest:  { value: new THREE.Color(0xc3e8fa) },
+    uSun:    { value: new THREE.Vector3(-900, 1400, 700).normalize() },
+  },
+  vertexShader: `
+    uniform float uTime; uniform vec2 uOrigin; uniform float uAmp; uniform float uScale;
+    varying vec3 vN; varying float vCrest; varying vec3 vW;
+
+    // Sum of Gerstner waves. Wavelengths are in km to match world units:
+    // 0.35 km swell down to 0.05 km chop.
+    vec3 gerstner(vec2 p, out vec3 nrm){
+      vec3 disp = vec3(0.0);
+      vec3 tx = vec3(1.0,0.0,0.0), tz = vec3(0.0,0.0,1.0);
+      const int N = 4;
+      vec2 dirs[4]; dirs[0]=vec2(1.0,0.13); dirs[1]=vec2(-0.35,0.94);
+                    dirs[2]=vec2(0.72,-0.69); dirs[3]=vec2(-0.96,-0.28);
+      float lens[4]; lens[0]=0.205; lens[1]=0.118; lens[2]=0.061; lens[3]=0.029;
+      float amps[4]; amps[0]=0.0024; amps[1]=0.0014; amps[2]=0.0007; amps[3]=0.00034;
+      float steep[4]; steep[0]=0.62; steep[1]=0.52; steep[2]=0.40; steep[3]=0.30;
+
+      for(int i=0;i<N;i++){
+        vec2 d = normalize(dirs[i]);
+        float k = 6.2831853 / lens[i];
+        float c = sqrt(9.81 / k) * 0.001;      // km/s
+        float f = k * dot(d, p) - c * k * uTime;
+        float a = amps[i] * uAmp;
+        float q = steep[i] / (k * a * 4.0);
+        float cf = cos(f), sf = sin(f);
+        disp.x += q * a * d.x * cf;
+        disp.z += q * a * d.y * cf;
+        disp.y += a * sf;
+        float wa = k * a;
+        tx += vec3(-q*d.x*d.x*wa*sf, d.x*wa*cf, -q*d.x*d.y*wa*sf);
+        tz += vec3(-q*d.x*d.y*wa*sf, d.y*wa*cf, -q*d.y*d.y*wa*sf);
+      }
+      nrm = normalize(cross(tz, tx));
+      return disp;
+    }
+
+    void main(){
+      vec3 pos = position;
+      // Phase is evaluated in world kilometres and the resulting displacement
+      // divided back out, so stretching the mesh to cover a wider view does
+      // not stretch the swell into a visible repeating tile.
+      vec2 wp = pos.xz * uScale + uOrigin;
+      vec3 n; vec3 d = gerstner(wp, n);
+      pos += d / uScale;
+      vN = n; vCrest = clamp(d.y / 0.0034, -1.0, 1.0);
+      vW = pos;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+    }`,
+  fragmentShader: `
+    uniform vec3 uDeep, uShallow, uCrest, uSun;
+    varying vec3 vN; varying float vCrest; varying vec3 vW;
+    void main(){
+      vec3 n = normalize(vN);
+      float fres = pow(1.0 - max(dot(n, vec3(0.0,1.0,0.0)), 0.0), 2.2);
+      vec3 col = mix(uDeep, uShallow, clamp(vCrest*0.5+0.5, 0.0, 1.0));
+      col = mix(col, uCrest, smoothstep(0.55, 1.0, vCrest) * 0.55);
+      col += fres * 0.20;
+      float spec = pow(max(dot(reflect(-uSun, n), normalize(cameraPosition - vW)), 0.0), 60.0);
+      col += spec * 0.85;
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+});
+const ocean = new THREE.Mesh(oceanGeo, oceanMat);
+ocean.renderOrder = 1;
+scene.add(ocean);
+
+const farSea = new THREE.Mesh(
+  new THREE.PlaneGeometry(9000, 9000).rotateX(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({ color: 0x123a5c }));
+farSea.position.y = -0.02;                   // just below the wave plane
+scene.add(farSea);
+
+// ── Land ───────────────────────────────────────────────────────────────────
+{
+  const BB = { w: LON0 - 34, e: LON0 + 34, s: LAT0 - 26, n: LAT0 + 26 };
+  const shapes = [];
+  const addPoly = rings => {
+    const outer = rings[0];
+    if (!outer || outer.length < 4) return;
+    if (!outer.some(c => c[0] > BB.w && c[0] < BB.e && c[1] > BB.s && c[1] < BB.n)) return;
+    const s = new THREE.Shape();
+    outer.forEach(([lo, la], i) => i ? s.lineTo(px(lo), pz(la)) : s.moveTo(px(lo), pz(la)));
+    for (let i = 1; i < rings.length; i++) {
+      if (rings[i].length < 4) continue;
+      const h = new THREE.Path();
+      rings[i].forEach(([lo, la], j) => j ? h.lineTo(px(lo), pz(la)) : h.moveTo(px(lo), pz(la)));
+      s.holes.push(h);
+    }
+    shapes.push(s);
+  };
+  for (const f of LAND.features) {
+    const g = f.geometry;
+    if (g.type === 'Polygon') addPoly(g.coordinates);
+    else if (g.type === 'MultiPolygon') g.coordinates.forEach(addPoly);
+  }
+  const geo = new THREE.ExtrudeGeometry(shapes, { depth: 0.9, bevelEnabled: false });
+  geo.rotateX(Math.PI / 2);                    // shape XY plane -> world XZ
+  const land = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x3c4f42 }));
+  land.position.y = 0.9;
+  scene.add(land);
+
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geo, 50),
+    new THREE.LineBasicMaterial({ color: 0xa9c8b6, transparent: true, opacity: 0.85 }));
+  edges.position.y = 0.92;
+  scene.add(edges);
+}
+
+// ── Route network ──────────────────────────────────────────────────────────
+const routeGroup = new THREE.Group();
+scene.add(routeGroup);
+
+/**
+ * Flat ribbon following a lon/lat path, laid on the sea surface.
+ * WebGL ignores LineBasicMaterial.linewidth, so a route drawn as a line is a
+ * one-pixel hairline at any zoom. Real geometry is the only way to give the
+ * track visible weight.
+ */
+function ribbonGeometry(path, halfW, y) {
+  const n = path.length, pos = new Float32Array(n * 6), idx = [];
+  for (let i = 0; i < n; i++) {
+    const x = px(path[i][0]), z = pz(path[i][1]);
+    const a = path[Math.max(i - 1, 0)], b = path[Math.min(i + 1, n - 1)];
+    let dx = px(b[0]) - px(a[0]), dz = pz(b[1]) - pz(a[1]);
+    const len = Math.hypot(dx, dz) || 1;
+    dx /= len; dz /= len;
+    const nx = -dz * halfW, nz = dx * halfW;      // perpendicular in the XZ plane
+    pos[i * 6]     = x + nx; pos[i * 6 + 1] = y; pos[i * 6 + 2] = z + nz;
+    pos[i * 6 + 3] = x - nx; pos[i * 6 + 4] = y; pos[i * 6 + 5] = z - nz;
+  }
+  for (let i = 0; i < n - 1; i++) {
+    const a = i * 2;
+    idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  return g;
+}
+
+const ROUTE_HALF_W = 5.0;      // km; ~10 km wide stays legible across the chart view
+
+for (const s of SEGS) {
+  if (s.type === 'port') continue;
+  const laden = s.type === 'laden';
+  const lane = new THREE.Mesh(
+    ribbonGeometry(s.path, ROUTE_HALF_W, 0.25),
+    new THREE.MeshBasicMaterial({
+      color: laden ? 0x10b981 : 0xf59e0b,
+      transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false }));
+  lane.userData.seg = s;
+  routeGroup.add(lane);
+}
+
+// trail of the path already sailed
+const trailMat = new THREE.MeshBasicMaterial({
+  color: 0x67e8f9, transparent: true, opacity: 0.95,
+  side: THREE.DoubleSide, depthWrite: false });
+let trail = null;
+
+// ── Ports ──────────────────────────────────────────────────────────────────
+const portMeshes = {};
+for (const [name, p] of Object.entries(TL.ports)) {
+  const g = new THREE.Group();
+  g.position.set(px(p.lon), 0.3, pz(p.lat));
+  const dot = new THREE.Mesh(new THREE.SphereGeometry(3.2, 12, 12),
+    new THREE.MeshBasicMaterial({ color: 0x94a3b8 }));
+  g.add(dot);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(5, 6.4, 28),
+    new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0, side: THREE.DoubleSide }));
+  ring.rotation.x = -Math.PI / 2;
+  g.add(ring);
+  g.userData = { dot, ring };
+  scene.add(g);
+  portMeshes[name] = g;
+}
+
+// ── Vessel ─────────────────────────────────────────────────────────────────
+// Built from real particulars: LOA/beam in metres -> km world units.
+const LOA_M  = META.loa  || 7.05 * Math.pow(META.dwt || 25000, 0.3083);
+const BEAM_M = META.beam || LOA_M / 6.3;
+const L = LOA_M / 1000, B = BEAM_M / 1000;      // km
+
+function buildVessel() {
+  const g = new THREE.Group();
+  const steel = new THREE.MeshStandardMaterial({ color: 0x223549, roughness: .75, metalness: .25 });
+  const hullRed = new THREE.MeshStandardMaterial({ color: 0x7f1d1d, roughness: .85 });
+  const house = new THREE.MeshStandardMaterial({ color: 0xdde6ee, roughness: .6 });
+  const hatch = new THREE.MeshStandardMaterial({ color: 0x0f3a5f, roughness: .7 });
+
+  // hull: boxes tapering toward the bow
+  const D = B * 0.62;
+  const mid = new THREE.Mesh(new THREE.BoxGeometry(B, D, L * 0.62), steel);
+  mid.position.y = D / 2; g.add(mid);
+  const bow = new THREE.Mesh(new THREE.CylinderGeometry(B / 2, B / 2, D, 14, 1, false, 0, Math.PI), steel);
+  bow.rotation.set(Math.PI / 2, 0, Math.PI); bow.position.set(0, D / 2, L * 0.31); g.add(bow);
+  const stern = new THREE.Mesh(new THREE.BoxGeometry(B, D, L * 0.07), steel);
+  stern.position.set(0, D / 2, -L * 0.345); g.add(stern);
+  const boot = new THREE.Mesh(new THREE.BoxGeometry(B * 1.005, D * 0.34, L * 0.7), hullRed);
+  boot.position.y = D * 0.17; g.add(boot);
+
+  // deck, hatch covers, cranes
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(B * 0.98, D * 0.06, L * 0.7), steel);
+  deck.position.y = D; g.add(deck);
+
+  const holds = [];
+  for (let i = 0; i < 4; i++) {
+    const h = new THREE.Mesh(new THREE.BoxGeometry(B * 0.66, D * 0.12, L * 0.115), hatch);
+    h.position.set(0, D * 1.05, L * (0.20 - i * 0.145));
+    g.add(h); holds.push(h);
+  }
+  const cranes = [];
+  for (let i = 0; i < 3; i++) {
+    const c = new THREE.Group();
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(B * .035, B * .045, D * .9, 8), house);
+    post.position.y = D * 1.45; c.add(post);
+    const jib = new THREE.Mesh(new THREE.BoxGeometry(B * .05, D * .05, L * .16), house);
+    jib.position.set(0, D * 1.85, L * .06); jib.rotation.x = -0.5; c.add(jib);
+    c.position.set(0, 0, L * (0.13 - i * 0.145));
+    g.add(c); cranes.push(c);
+  }
+
+  // accommodation block + funnel, aft
+  const acc = new THREE.Mesh(new THREE.BoxGeometry(B * 0.72, D * 0.95, L * 0.075), house);
+  acc.position.set(0, D * 1.48, -L * 0.30); g.add(acc);
+  const fun = new THREE.Mesh(new THREE.CylinderGeometry(B * .075, B * .085, D * .5, 10), steel);
+  fun.position.set(0, D * 2.15, -L * 0.335); g.add(fun);
+
+  return { group: g, holds, cranes };
+}
+// A ring that only shows from chart altitude, where the hull is a few pixels.
+const halo = new THREE.Mesh(
+  new THREE.RingGeometry(0.62, 0.78, 40),
+  new THREE.MeshBasicMaterial({ color: 0x67e8f9, transparent: true,
+                                opacity: 0, side: THREE.DoubleSide, depthTest: false }));
+halo.rotation.x = -Math.PI / 2;
+halo.renderOrder = 5;
+scene.add(halo);
+
+const vessel = buildVessel();
+const vesselPivot = new THREE.Group();     // holds scale exaggeration
+vesselPivot.add(vessel.group);
+scene.add(vesselPivot);
+
+// ── Port: quay, portal cranes, stockpile ───────────────────────────────────
+// Only shown during a port call. Dimensions derive from the vessel so the
+// berth stays proportionate whatever hull the IMO lookup returned.
+function buildPort() {
+  const g = new THREE.Group();
+  const D = B * 0.62;
+  const concrete = new THREE.MeshStandardMaterial({ color: 0x8d8f93, roughness: .95 });
+  const steel    = new THREE.MeshStandardMaterial({ color: 0xd8dde3, roughness: .5, metalness: .4 });
+  const dark     = new THREE.MeshStandardMaterial({ color: 0x3a4250, roughness: .8 });
+
+  const QW = L * 0.34, QL = L * 1.55, QH = D * 1.15;
+  const QX = B * 0.62 + QW / 2;            // quay sits off the starboard side
+
+  const quay = new THREE.Mesh(new THREE.BoxGeometry(QW, QH, QL), concrete);
+  quay.position.set(QX, QH / 2, 0);
+  g.add(quay);
+
+  // Shore behind the quay. Without it the berth looks like a raft in open sea.
+  const shoreW = L * 3.2, shoreL = QL * 2.6;
+  const shore = new THREE.Mesh(
+    new THREE.BoxGeometry(shoreW, QH * 0.92, shoreL),
+    new THREE.MeshStandardMaterial({ color: 0x4a5340, roughness: 1.0 }));
+  shore.position.set(QX + QW / 2 + shoreW / 2, QH * 0.46, 0);
+  g.add(shore);
+
+  // warehouses along the back of the apron, for depth
+  for (let i = -1; i <= 1; i++) {
+    const wh = new THREE.Mesh(
+      new THREE.BoxGeometry(L * 0.22, D * 1.6, QL * 0.34),
+      new THREE.MeshStandardMaterial({ color: 0xb9c0c7, roughness: .85 }));
+    wh.position.set(QX + QW * 0.85, QH + D * 0.8, QL * 0.42 * i);
+    g.add(wh);
+  }
+
+  // apron stripe so the quay edge reads against the water
+  const edge = new THREE.Mesh(new THREE.BoxGeometry(QW * 0.06, QH * 0.08, QL),
+    new THREE.MeshStandardMaterial({ color: 0xf2c14e, roughness: .8 }));
+  edge.position.set(QX - QW / 2 + QW * 0.03, QH + QH * 0.04, 0);
+  g.add(edge);
+
+  // portal cranes straddling the quay, booms reaching over the hatches
+  const cranes = [];
+  for (let i = 0; i < 3; i++) {
+    const c = new THREE.Group();
+    const legH = D * 2.5, legR = B * 0.075;
+    for (const dx of [-QW * 0.3, QW * 0.3]) {
+      for (const dz of [-QL * 0.035, QL * 0.035]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(legR, legH, legR), steel);
+        leg.position.set(QX + dx, QH + legH / 2, dz);
+        c.add(leg);
+      }
+    }
+    const beamLen = QW + B * 2.6;          // reaches from quay out over the ship
+    const boom = new THREE.Mesh(new THREE.BoxGeometry(beamLen, legR * 1.5, legR * 1.6), steel);
+    boom.position.set(QX - B * 1.3 + beamLen / 2 - QW / 2, QH + legH, 0);
+    c.add(boom);
+
+    const trolley = new THREE.Mesh(new THREE.BoxGeometry(legR * 2.4, legR * 1.6, legR * 2.4), dark);
+    trolley.position.set(QX, QH + legH - legR, 0);
+    c.add(trolley);
+
+    const rope = new THREE.Mesh(new THREE.CylinderGeometry(legR * 0.12, legR * 0.12, 1, 6), dark);
+    rope.position.set(QX, QH, 0);
+    c.add(rope);
+
+    const grab = new THREE.Mesh(new THREE.BoxGeometry(legR * 2.6, legR * 1.8, legR * 2.6), dark);
+    grab.position.set(QX, QH, 0);
+    c.add(grab);
+
+    c.position.z = QL * (0.26 - i * 0.26);
+    g.add(c);
+    cranes.push({ group: c, trolley, rope, grab, legH, legR, QH, beamLen });
+  }
+
+  // stockpile on the apron: grows on discharge, drains on load
+  const pile = new THREE.Mesh(
+    new THREE.ConeGeometry(L * 0.09, D * 2.6, 18),
+    new THREE.MeshStandardMaterial({ color: 0xc9a165, roughness: 1.0 }));
+  pile.position.set(QX + QW * 0.22, QH, 0);
+  g.add(pile);
+
+  return { group: g, cranes, pile, QH, QX };
+}
+
+const port = buildPort();
+const portPivot = new THREE.Group();
+portPivot.add(port.group);
+portPivot.visible = false;
+scene.add(portPivot);
+
+// Animates the berth. `f` is progress through the call, 0..1.
+function animatePort(seg, f, t) {
+  const loading = seg.mode === 'load';
+  const level = loading ? 1 - f : f;        // stockpile fills or drains
+  port.pile.scale.set(0.35 + level * 0.85, 0.3 + level * 1.0, 0.35 + level * 0.85);
+  port.pile.position.y = port.QH;
+
+  port.cranes.forEach((c, i) => {
+    // one grab cycle every ~2.6 s, staggered per crane
+    const ph = ((t / 2.6) + i * 0.33) % 1;
+    // trolley tracks between the hold (outboard) and the pile (inboard)
+    const swing = Math.sin(ph * Math.PI * 2);
+    c.trolley.position.x = port.QX - B * 1.15 + swing * B * 1.15;
+    // hoist: down over the hold in the first half, up over the pile in the second
+    const drop = Math.max(0, Math.sin(ph * Math.PI * 2 + Math.PI / 2)) * c.legH * 0.72;
+    const topY = c.QH + c.legH - c.legR;
+    c.grab.position.set(c.trolley.position.x, topY - drop, 0);
+    c.rope.position.set(c.trolley.position.x, topY - drop / 2, 0);
+    c.rope.scale.y = Math.max(drop, 1e-4);
+  });
+}
+
+// wake
+const wakeGeo = new THREE.BufferGeometry();
+const WAKE_N = 90;
+wakeGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(WAKE_N * 3), 3));
+const wake = new THREE.Line(wakeGeo,
+  new THREE.LineBasicMaterial({ color: 0xbfe7ff, transparent: true, opacity: .5 }));
+scene.add(wake);
+const wakePts = [];
+
+// ── Timeline lookup ────────────────────────────────────────────────────────
+function segAt(day) {
+  for (const s of SEGS) if (day >= s.start_day && day <= s.end_day) return s;
+  return day < SEGS[0].start_day ? SEGS[0] : SEGS[SEGS.length - 1];
+}
+function voyageAt(day) {
+  for (const v of VOY) if (day >= v.start_day && day <= v.end_day) return v;
+  return day < VOY[0].start_day ? VOY[0] : VOY[VOY.length - 1];
+}
+function stateAt(day) {
+  const s = segAt(day);
+  if (s.type === 'port') {
+    return { lon: s.lon, lat: s.lat, heading: 0, status: s.mode, seg: s };
+  }
+  const span = Math.max(s.end_day - s.start_day, 1e-9);
+  const f = Math.min(Math.max((day - s.start_day) / span, 0), 1);
+  const target = f * s.cum_nm[s.cum_nm.length - 1];
+  let i = 1;
+  while (i < s.cum_nm.length - 1 && s.cum_nm[i] < target) i++;
+  const t = (target - s.cum_nm[i - 1]) / Math.max(s.cum_nm[i] - s.cum_nm[i - 1], 1e-9);
+  const [lo1, la1] = s.path[i - 1], [lo2, la2] = s.path[i];
+  return {
+    lon: lo1 + (lo2 - lo1) * t,
+    lat: la1 + (la2 - la1) * t,
+    heading: Math.atan2(px(lo2) - px(lo1), pz(lo2 ? lo2 : lo1) - pz(la1)) ,
+    hx: px(lo2) - px(lo1), hz: pz(la2) - pz(la1),
+    status: s.type, seg: s,
+  };
+}
+
+// ── Time warp: hero port calls play slow, transits fast ────────────────────
+// Build a piecewise map from video-time (0..DURATION) to voyage-day.
+// Screen time is assigned per segment rather than by squeezing the year into
+// a fixed length: every port-to-port passage gets SEC_MIN..SEC_MAX seconds
+// scaled by its distance, so the pace is even and legible. Total runtime is
+// whatever that adds up to - it is an output, not a target.
+const P = new URLSearchParams(location.search);
+const SEC_MIN   = +(P.get('minsec')  ?? 4);    // shortest passage
+const SEC_MAX   = +(P.get('maxsec')  ?? 6);    // longest passage
+const SEC_PORT  = +(P.get('portsec') ?? 2);    // routine call alongside
+const SEC_HERO  = +(P.get('herosec') ?? 8);    // hero call, cargo work on show
+const heroCount = +(P.get('heroes')  ?? 3);
+
+const portSegs = SEGS.map((s, i) => ({ s, i })).filter(o => o.s.type === 'port');
+portSegs.sort((a, b) => b.s.days - a.s.days);
+const heroIdx = new Set(portSegs.slice(0, heroCount).map(o => o.i));
+
+const transitNm = SEGS.filter(s => s.type !== 'port').map(s => s.nm);
+const nmMin = Math.min(...transitNm), nmMax = Math.max(...transitNm);
+
+const secFor = (s, i) => {
+  if (s.type === 'port') return heroIdx.has(i) ? SEC_HERO : SEC_PORT;
+  const f = nmMax > nmMin ? (s.nm - nmMin) / (nmMax - nmMin) : 0.5;
+  return SEC_MIN + (SEC_MAX - SEC_MIN) * f;
+};
+
+const marks = [];                          // {t0,t1,d0,d1}
+let DURATION = 0;
+{
+  let t = 0;
+  SEGS.forEach((s, i) => {
+    const dt = secFor(s, i);
+    marks.push({ t0: t, t1: t + dt, d0: s.start_day, d1: s.end_day });
+    t += dt;
+  });
+  DURATION = t;
+}
+function dayAtVideoTime(t) {
+  t = Math.min(Math.max(t, 0), DURATION);
+  for (const m of marks) {
+    if (t >= m.t0 && t <= m.t1) {
+      const f = (t - m.t0) / Math.max(m.t1 - m.t0, 1e-9);
+      return m.d0 + (m.d1 - m.d0) * f;
+    }
+  }
+  return TOTAL_DAYS;
+}
+
+// ── HUD ────────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const fmt$ = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString();
+const START = new Date(META.start_date + 'T00:00:00Z');
+const LABEL = { laden: 'LADEN PASSAGE', ballast: 'BALLAST', load: 'LOADING', discharge: 'DISCHARGING' };
+
+$('vessel-name').textContent = META.vessel_name;
+$('vessel-sub').textContent =
+  [META.vessel_imo && 'IMO ' + META.vessel_imo,
+   META.dwt && Math.round(META.dwt).toLocaleString() + ' DWT',
+   `${LOA_M.toFixed(0)}m × ${BEAM_M.toFixed(0)}m`,
+   META.flag].filter(Boolean).join('  ·  ');
+
+function updateHUD(day, st) {
+  const v = voyageAt(day);
+  $('day').innerHTML = Math.floor(day) + `<span>&nbsp;/ ${Math.round(TOTAL_DAYS)} DAYS</span>`;
+  const d = new Date(START.getTime() + day * 86400000);
+  $('date').textContent = d.toUTCString().slice(5, 16).toUpperCase();
+
+  const pill = $('status-pill');
+  pill.textContent = LABEL[st.status] || st.status;
+  pill.className = 'st-' + st.status;
+
+  if (st.seg.type === 'port') {
+    $('leg-route').textContent = st.seg.port;
+    $('leg-cargo').textContent = st.seg.mode === 'load'
+      ? `Loading ${Math.round(st.seg.cargo_mt).toLocaleString()} MT ${st.seg.commodity}`
+      : `Discharging ${Math.round(st.seg.cargo_mt).toLocaleString()} MT ${st.seg.commodity}`;
+  } else {
+    $('leg-route').textContent = `${st.seg.from} → ${st.seg.to}`;
+    $('leg-cargo').textContent = st.status === 'laden'
+      ? `${Math.round(v.cargo_mt).toLocaleString()} MT ${v.commodity}  ·  ${Math.round(st.seg.nm).toLocaleString()} nm`
+      : `Ballast  ·  ${Math.round(st.seg.nm).toLocaleString()} nm to load port`;
+  }
+
+  // P&L accrues smoothly across the voyage rather than jumping at the end
+  const prev = VOY.indexOf(v) > 0 ? VOY[VOY.indexOf(v) - 1].cum_profit : 0;
+  const f = Math.min(Math.max((day - v.start_day) / Math.max(v.end_day - v.start_day, 1e-9), 0), 1);
+  $('profit').textContent = fmt$(prev + (v.cum_profit - prev) * f);
+  $('voyage-lbl').textContent = `VOYAGE ${v.voyage_num} OF ${VOY.length}  ·  ${v.commodity}`;
+  $('bar-fill').style.width = (100 * day / TOTAL_DAYS) + '%';
+}
+
+// ── Minimap ────────────────────────────────────────────────────────────────
+const mm = $('minimap').getContext('2d');
+const mmBounds = (() => {
+  const xs = [], zs = [];
+  SEGS.forEach(s => { if (s.path) s.path.forEach(([lo, la]) => { xs.push(px(lo)); zs.push(pz(la)); }); });
+  const pad = 120;
+  return { x0: Math.min(...xs) - pad, x1: Math.max(...xs) + pad,
+           z0: Math.min(...zs) - pad, z1: Math.max(...zs) + pad };
+})();
+function mmProj(x, z) {
+  const W = 460, H = 380;
+  const sx = W / (mmBounds.x1 - mmBounds.x0), sz = H / (mmBounds.z1 - mmBounds.z0);
+  const s = Math.min(sx, sz);
+  return [(x - mmBounds.x0) * s + (W - (mmBounds.x1 - mmBounds.x0) * s) / 2,
+          (z - mmBounds.z0) * s + (H - (mmBounds.z1 - mmBounds.z0) * s) / 2];
+}
+function _domMinimapUnused(day, st) {
+  mm.clearRect(0, 0, 460, 380);
+  mm.lineWidth = 1.6;
+  for (const s of SEGS) {
+    if (!s.path) continue;
+    const done = day >= s.end_day, active = day >= s.start_day && day <= s.end_day;
+    mm.strokeStyle = active ? '#38bdf8' : done
+      ? (s.type === 'laden' ? 'rgba(16,185,129,.75)' : 'rgba(245,158,11,.6)')
+      : 'rgba(255,255,255,.11)';
+    mm.beginPath();
+    s.path.forEach(([lo, la], i) => {
+      const [X, Y] = mmProj(px(lo), pz(la));
+      i ? mm.lineTo(X, Y) : mm.moveTo(X, Y);
+    });
+    mm.stroke();
+  }
+  mm.fillStyle = '#64748b';
+  for (const p of Object.values(TL.ports)) {
+    const [X, Y] = mmProj(px(p.lon), pz(p.lat));
+    mm.fillRect(X - 1.5, Y - 1.5, 3, 3);
+  }
+  const [VX, VY] = mmProj(px(st.lon), pz(st.lat));
+  mm.fillStyle = '#f8fafc';
+  mm.beginPath(); mm.arc(VX, VY, 4.5, 0, 7); mm.fill();
+  mm.strokeStyle = 'rgba(56,189,248,.85)'; mm.lineWidth = 2;
+  mm.beginPath(); mm.arc(VX, VY, 9, 0, 7); mm.stroke();
+}
+
+// ── Camera ─────────────────────────────────────────────────────────────────
+let camMode = 'auto';
+// The camera rides a smoothed OFFSET from the vessel rather than chasing its
+// world position. During a passage the ship covers thousands of km per second
+// of video, so a position-chasing camera falls irrecoverably behind.
+let altS = 0, backS = 0, yawS = 0;
+let curEff = 1;   // on-screen vessel length (km); port markers scale off this
+let atPortNow = false;   // overlays meant for open sea must not fire at a berth
+let inited = false;
+const camPos = new THREE.Vector3();
+
+function updateCamera(day, st, dt) {
+  const vx = px(st.lon), vz = pz(st.lat);
+  const atPort = st.seg.type === 'port';
+  atPortNow = atPort;
+  const hero = heroIdx.has(SEGS.indexOf(st.seg));
+
+  // Framing is expressed in vessel lengths, not absolute distances, so the
+  // ship occupies a consistent share of frame whatever the exaggeration.
+  // `exag` trades context for detail: 1 = true scale for hero port calls,
+  // larger values keep the hull readable when the camera is high enough to
+  // show the surrounding sea.
+  // Two different framing problems. Alongside, the subject is the ship, so the
+  // camera is placed in vessel lengths. On passage the subject is the ROUTE, so
+  // the camera instead covers a target span of sea and the hull is exaggerated
+  // just enough to stay legible within it - a chart view rather than a sea-level
+  // one, which is the only way a 2,600 nm leg reads as a line with shape.
+  let exag, alt, back;
+  const HALF_FOV = THREE.MathUtils.degToRad(camera.fov / 2);
+
+  const chart = (spanKm, pitchDeg, shipFrac) => {
+    const d = (spanKm / 2) / Math.tan(HALF_FOV);
+    const pitch = THREE.MathUtils.degToRad(pitchDeg);
+    alt = d * Math.sin(pitch);
+    back = d * Math.cos(pitch);
+    exag = (shipFrac * spanKm) / L;
+  };
+
+  if (camMode === 'over') {
+    chart(2600, 74, 0.045);                       // whole-network overview
+  } else if (atPort && hero) {
+    exag = 1; alt = L * 0.42; back = L * 1.45;    // true scale, berth in frame
+  } else if (atPort) {
+    exag = 2.6; alt = L * 2.6 * 0.55; back = L * 2.6 * 1.8;
+  } else {
+    // Span scales with leg length so a short hop is not framed like an ocean
+    // crossing, but stays inside sane bounds.
+    const legKm = st.seg.nm * 1.852;
+    chart(THREE.MathUtils.clamp(legKm * 0.55, 280, 1150), 57, 0.075);
+  }
+
+  vesselPivot.scale.setScalar(exag);
+  const eff = L * exag;               // on-screen vessel length, km
+  curEff = eff;
+
+  const h = Math.atan2(st.hx || 0, st.hz || 1);
+  // Offset off the quarter so the hull reads in profile rather than transom-on.
+  const yawWant = h + 0.62;
+  if (!inited) { altS = alt; backS = back; yawS = yawWant; inited = true; }
+
+  const k = 1 - Math.pow(0.0016, dt);       // frame-rate independent smoothing
+  altS  += (alt  - altS)  * k;
+  backS += (back - backS) * k;
+  // wrap to the shortest angular path so heading changes never spin the camera
+  const dYaw = ((yawWant - yawS + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+  yawS += dYaw * k;
+
+  camPos.set(vx - Math.sin(yawS) * backS, altS, vz - Math.cos(yawS) * backS);
+  camera.position.copy(camPos);
+  camera.lookAt(vx, atPort ? L * 0.4 : 0, vz);
+
+  // Keep the wave plane large enough to fill the near field at this altitude.
+  const oScale = Math.max(backS * 3.5, 8) / OCEAN_SIZE;
+  // Depth precision depends on the near/far ratio, so the near plane has to
+  // track altitude: fixed at 0.05 km it smears land into the sea from chart
+  // height, and clips the hull if raised for that case.
+  const wantNear = THREE.MathUtils.clamp(altS * 0.02, 0.004, 30);
+  if (Math.abs(camera.near - wantNear) > wantNear * 0.1) {
+    camera.near = wantNear;
+    camera.updateProjectionMatrix();
+  }
+  ocean.scale.setScalar(oScale);
+  oceanMat.uniforms.uScale.value = oScale;
+
+  // Waves read only from close range; flatten them as the camera climbs so
+  // high shots do not turn into shimmering noise.
+  oceanMat.uniforms.uAmp.value = THREE.MathUtils.clamp(1 - (camPos.y - 0.4) / 26, 0.0, 1);
+  scene.fog.density = THREE.MathUtils.clamp(0.0016 / Math.max(eff, 0.05), 0.00002, 0.02);
+}
+
+// ── Frame ──────────────────────────────────────────────────────────────────
+let videoT = 0, playing = true, last = performance.now();
+
+function frame(day, dt) {
+  const st = stateAt(day);
+  const vx = px(st.lon), vz = pz(st.lat);
+
+  vesselPivot.position.set(vx, 0, vz);
+  halo.position.set(vx, 0.02, vz);
+  halo.scale.setScalar(Math.max(curEff * 0.85, 0.01));
+  halo.material.opacity = (!atPortNow && curEff > L * 10) ? 0.55 : 0;
+  vesselPivot.rotation.y = Math.atan2(st.hx || 0, st.hz || 1);
+
+  // cranes work only alongside
+  const working = st.seg.type === 'port';
+  vessel.cranes.forEach((c, i) => {
+    c.rotation.y = working ? Math.sin(videoT * 1.6 + i * 2.1) * 0.8 : 0;
+  });
+  vessel.holds.forEach((h, i) => {
+    // hatch covers slide open while cargo is worked
+    const open = working ? Math.abs(Math.sin(videoT * 0.9 + i)) : 0;
+    h.scale.z = 1 - open * 0.55;
+  });
+
+  // Berth appears only for a port call, and only when the camera is close
+  // enough for it to read - at transit exaggeration it would be a smear.
+  const showPort = working && curEff < L * 5;
+  portPivot.visible = showPort;
+  routeGroup.visible = !showPort;
+  // Every lane drawn at full weight hides the one that matters. Keep the rest
+  // as faint context and bring the leg under way forward.
+  for (const lane of routeGroup.children) {
+    const active = lane.userData.seg === st.seg;
+    lane.material.opacity = active ? 0.85 : 0.10;
+    lane.renderOrder = active ? 3 : 0;
+  }
+  if (showPort) {
+    portPivot.position.set(vx, 0, vz);
+    portPivot.rotation.y = vesselPivot.rotation.y;
+    portPivot.scale.copy(vesselPivot.scale);
+    const f = Math.min(Math.max(
+      (day - st.seg.start_day) / Math.max(st.seg.end_day - st.seg.start_day, 1e-9), 0), 1);
+    animatePort(st.seg, f, videoT);
+  }
+
+  // ocean follows the vessel
+  ocean.position.set(vx, 0, vz);
+  farSea.position.set(vx, -0.02, vz);
+  oceanMat.uniforms.uOrigin.value.set(vx, vz);
+  oceanMat.uniforms.uTime.value = videoT;
+
+  // wake
+  if (!working) {
+    wakePts.push(new THREE.Vector3(vx, 0.12, vz));
+    if (wakePts.length > WAKE_N) wakePts.shift();
+    const arr = wakeGeo.attributes.position.array;
+    for (let i = 0; i < WAKE_N; i++) {
+      const p = wakePts[Math.min(i, wakePts.length - 1)] || new THREE.Vector3(vx, 0.12, vz);
+      arr[i * 3] = p.x; arr[i * 3 + 1] = p.y; arr[i * 3 + 2] = p.z;
+    }
+    wakeGeo.attributes.position.needsUpdate = true;
+  }
+
+  // sailed trail
+  if (trail) scene.remove(trail);
+  {
+    const pts = [];
+    for (const s of SEGS) {
+      if (!s.path || s.start_day > day) continue;
+      if (s.end_day <= day) s.path.forEach(([lo, la]) => pts.push({ lonlat: [lo, la] }));
+      else pts.push({ lonlat: [st.lon, st.lat] });
+    }
+    if (pts.length > 1) {
+      const lonlat = pts.map(v => [v.lonlat[0], v.lonlat[1]]);
+      trail = new THREE.Mesh(ribbonGeometry(lonlat, ROUTE_HALF_W * 1.35, 0.32), trailMat);
+      // Rebuilt every frame, so visibility has to be set here rather than in the
+      // pass above - otherwise a 13 km ribbon reappears alongside the berth.
+      trail.visible = !showPort;
+      scene.add(trail);
+    }
+  }
+
+  // port highlight
+  for (const [name, g] of Object.entries(portMeshes)) {
+    const on = st.seg.type === 'port' && st.seg.port === name;
+    // Once the berth itself is drawn the abstract marker is redundant and
+    // would float over the quay as a grey ball.
+    const markersOn = !(working && curEff < L * 5);
+    g.visible = markersOn;
+    g.userData.ring.material.opacity = (on && markersOn) ? 0.6 + Math.sin(videoT * 3) * 0.25 : 0;
+    g.userData.dot.material.color.set(on ? 0x38bdf8 : 0x94a3b8);
+    // Sized against the vessel, not the camera: an altitude-based scale makes
+    // the marker dwarf the ship during close port calls.
+    g.scale.setScalar(THREE.MathUtils.clamp(curEff * 0.016, 0.0008, 6));
+  }
+
+  updateCamera(day, st, dt);
+  renderer.render(scene, camera);
+
+  // composite: 3D first, then the overlay
+  octx.drawImage(renderer.domElement, 0, 0, out.width, out.height);
+
+  const v = voyageAt(day);
+  const iv = VOY.indexOf(v);
+  const prevCum = iv > 0 ? VOY[iv - 1].cum_profit : 0;
+  const f = Math.min(Math.max((day - v.start_day) / Math.max(v.end_day - v.start_day, 1e-9), 0), 1);
+
+  drawMinimap(octx, {
+    w: out.width, h: out.height, segs: SEGS, ports: TL.ports, day,
+    proj: { x: px, z: pz }, vessel: st,
+  });
+  drawHUD(octx, {
+    w: out.width, h: out.height, meta: META, day, totalDays: TOTAL_DAYS,
+    state: st, voyage: v, nVoyages: VOY.length,
+    cumProfit: prevCum + (v.cum_profit - prevCum) * f,
+    startDate: START, hull: `${LOA_M.toFixed(0)}m × ${BEAM_M.toFixed(0)}m`,
+  });
+
+  updateHUD(day, st);   // keeps the (hidden) DOM values in sync for tests
+}
+
+function loop(now) {
+  const dt = Math.min((now - last) / 1000, 0.1);
+  last = now;
+  if (playing) {
+    videoT += dt;
+    if (videoT > DURATION) { videoT = DURATION; playing = false; $('btn-play').textContent = '▶'; }
+    $('scrub').value = String(Math.round(1000 * videoT / DURATION));
+  }
+  frame(dayAtVideoTime(videoT), dt);
+  requestAnimationFrame(loop);
+}
+
+// ── Controls ───────────────────────────────────────────────────────────────
+$('btn-play').onclick = () => {
+  if (videoT >= DURATION) videoT = 0;
+  playing = !playing;
+  $('btn-play').textContent = playing ? '❚❚' : '▶';
+};
+$('scrub').oninput = e => { videoT = DURATION * e.target.value / 1000; };
+$('btn-cam').onclick = () => {
+  camMode = camMode === 'auto' ? 'over' : 'auto';
+  $('btn-cam').textContent = 'CAM: ' + camMode.toUpperCase();
+};
+
+// Record the canvas to webm; a helper script converts it to MP4.
+let rec = null;
+$('btn-rec').onclick = () => {
+  if (rec) { rec.stop(); return; }
+  const stream = out.captureStream(30);
+  const chunks = [];
+  rec = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 12e6 });
+  rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+  rec.onstop = () => {
+    const url = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = `voyage_run${META.run_id}.webm`; a.click();
+    rec = null; $('btn-rec').textContent = '● REC'; $('ctl').style.opacity = 1;
+  };
+  rec.start();
+  $('btn-rec').textContent = '■ STOP';
+  videoT = 0; playing = true; $('btn-play').textContent = '❚❚';
+  setTimeout(() => rec && rec.stop(), (DURATION + 0.6) * 1000);
+};
+
+function fit() {
+  const w = innerWidth, h = innerHeight;
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  renderer.setSize(w, h, false);
+  out.width = w; out.height = h;
+}
+addEventListener('resize', fit);
+fit();
+
+$('loading').remove();
+requestAnimationFrame(loop);
+
+// Exposed for automated capture and for tests: step() renders one frame at an
+// exact video time without relying on requestAnimationFrame, so a headless
+// harness can walk the whole 90 s deterministically.
+window.__voyage = {
+  DURATION, META,
+  pacing: { SEC_MIN, SEC_MAX, SEC_PORT, SEC_HERO, heroCount,
+            transits: transitNm.length, portCalls: portSegs.length },
+  seek: t => { videoT = t; playing = false; },
+  step(t, dt = 1 / 30) { videoT = t; playing = false; frame(dayAtVideoTime(t), dt); },
+  dayAt: dayAtVideoTime,
+  stateAt: t => stateAt(dayAtVideoTime(t)),
+  resize(w, h) {
+    camera.aspect = w / h; camera.updateProjectionMatrix();
+    renderer.setSize(w, h, false);
+    out.width = w; out.height = h;
+  },
+  hud: () => ({
+    day: $('day').textContent, date: $('date').textContent,
+    status: $('status-pill').textContent, route: $('leg-route').textContent,
+    cargo: $('leg-cargo').textContent, profit: $('profit').textContent,
+    voyage: $('voyage-lbl').textContent,
+  }),
+};
+</script>

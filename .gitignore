@@ -1,3 +1,9 @@
 __pycache__/ 
 *.pyc 
 .streamlit/secrets.toml 
+
+# Voyage video: generated artifacts, not source
+renderer/frames/
+renderer/output/
+renderer/data/timeline_*.json
+*.bak-*
