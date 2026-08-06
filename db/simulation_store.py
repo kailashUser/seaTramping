@@ -52,7 +52,14 @@ CREATE TABLE IF NOT EXISTS simulation_runs (
     median_tce       REAL,
     mean_tce         REAL,
     profitable_pct   REAL,
-    total_iterations INTEGER
+    total_iterations INTEGER,
+    -- Vessel particulars from the IMO lookup. Needed to render the vessel at
+    -- correct proportions; see _MIGRATIONS for existing databases.
+    loa              REAL,
+    beam             REAL,
+    vessel_type      TEXT    DEFAULT '',
+    year_built       TEXT    DEFAULT '',
+    flag             TEXT    DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS iteration_results (
@@ -101,12 +108,44 @@ CREATE INDEX IF NOT EXISTS idx_legs_run  ON top_programme_legs(run_id, programme
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def _num_or_none(value):
+    """Coerce an API value to float, or None when absent/unparseable."""
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    return num if num > 0 else None
+
+
+# Columns added after the original schema shipped. CREATE TABLE IF NOT EXISTS
+# will not add them to a database that already exists, so apply them explicitly.
+_MIGRATIONS = {
+    "simulation_runs": {
+        "loa":         "REAL",
+        "beam":        "REAL",
+        "vessel_type": "TEXT DEFAULT ''",
+        "year_built":  "TEXT DEFAULT ''",
+        "flag":        "TEXT DEFAULT ''",
+    },
+}
+
+
+def _apply_migrations(con: sqlite3.Connection) -> None:
+    """Add any missing columns. Idempotent."""
+    for table, columns in _MIGRATIONS.items():
+        existing = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+        for name, decl in columns.items():
+            if name not in existing:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+
 def init_db(db_file: str) -> None:
     """Create tables and indexes. Safe to call on every Streamlit app start."""
     Path(db_file).parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(db_file)
     try:
         con.executescript(_DDL)
+        _apply_migrations(con)
         con.commit()
     finally:
         con.close()
@@ -122,6 +161,7 @@ def save_run(
     vessel_name: str = "",
     vessel_imo: str = "",
     top_n: int = 50,
+    vessel_meta: dict = None,
 ) -> int:
     """
     Persist a completed simulation run in a single transaction.
@@ -136,6 +176,9 @@ def save_run(
     vessel_name  : display name (from session_state, may be empty)
     vessel_imo   : IMO number string (may be empty)
     top_n        : how many top programmes to store full leg detail for
+    vessel_meta  : particulars from the IMO lookup — loa, beam, vessel_type,
+                   year_built, flag. Persisted so the voyage visualisation can
+                   render the vessel at its real proportions.
 
     Returns
     -------
@@ -143,6 +186,7 @@ def save_run(
     """
     s      = analysis["summary"]
     run_at = datetime.now(timezone.utc).isoformat()
+    _vm    = vessel_meta or {}
 
     con = sqlite3.connect(db_file)
     try:
@@ -157,8 +201,9 @@ def save_run(
                 n_iterations, algorithm, freight_vol, bunker_vol, elapsed_sec,
                 mean_profit, median_profit, std_profit,
                 p10_profit, p90_profit, var_profit,
-                median_tce, mean_tce, profitable_pct, total_iterations
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                median_tce, mean_tce, profitable_pct, total_iterations,
+                loa, beam, vessel_type, year_built, flag
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 run_at, vessel_name or "", vessel_imo or "",
@@ -176,6 +221,11 @@ def save_run(
                 float(s["median_tce"]),    float(s["mean_tce"]),
                 float(s["profitable_pct"]),
                 int(s["total_iterations"]),
+                _num_or_none(_vm.get("loa")),
+                _num_or_none(_vm.get("beam")),
+                str(_vm.get("vessel_type") or ""),
+                str(_vm.get("year_built") or ""),
+                str(_vm.get("flag") or ""),
             ),
         )
         run_id = cur.lastrowid

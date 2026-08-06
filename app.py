@@ -532,6 +532,7 @@ if st.session_state.get("_pending_imo"):
         st.session_state["api_beam"]    = float(_p["beam"])
         st.session_state["api_year"]    = _p["year_built"]
         st.session_state["api_flag"]    = _p["flag"]
+        st.session_state["api_vessel_type"] = _p.get("vessel_type", "")
         # Calculate and store DWCC from DWT
         _api_dwt  = float(_p["dwt"])
         _api_dwcc = int(_api_dwt * 0.85)
@@ -2473,6 +2474,15 @@ if run_simulation_clicked and os.path.exists(DATA_PATH):
                 vessel_name=st.session_state.get('vessel_name', ''),
                 vessel_imo=st.session_state.get('vessel_imo', ''),
                 top_n=50,
+                # Particulars from the IMO lookup — the voyage visualisation
+                # scales the vessel from these rather than assuming a hull size.
+                vessel_meta={
+                    'loa':         st.session_state.get('vessel_loa')  or st.session_state.get('api_loa'),
+                    'beam':        st.session_state.get('vessel_beam') or st.session_state.get('api_beam'),
+                    'vessel_type': st.session_state.get('api_vessel_type', ''),
+                    'year_built':  st.session_state.get('api_year', ''),
+                    'flag':        st.session_state.get('api_flag', ''),
+                },
             )
             st.session_state['last_db_run_id'] = _db_run_id
         except Exception as _db_err:
@@ -4586,16 +4596,82 @@ updateHUD();
         sc5.metric("Cumulative",  f"+${cum_pl_vj:,.0f}")
         sc6.metric("Days Elapsed", f"{sel_days:.0f} d")
 
-        # ── Canvas ───────────────────────────────────────────────────────
-        _vj_exp = st.session_state.get('vj_map_expanded', False)
-        _exp_col, _ = st.columns([1, 9])
-        with _exp_col:
-            if st.button('⛶ Expand' if not _vj_exp else '⊠ Collapse',
-                         key='vj_expand_btn', use_container_width=True):
-                st.session_state['vj_map_expanded'] = not _vj_exp
-                st.rerun()
-        _map_iframe_h = 950 if _vj_exp else 600
-        st.components.v1.html(MARITIME_HTML, height=_map_iframe_h, scrolling=False)
+        # The 2D Plotly/mapbox canvas that used to render here has been retired
+        # in favour of the 3D voyage video below. MARITIME_HTML is still built
+        # above but no longer displayed — see notes for removing it entirely.
+
+        # ── 3D voyage video ──────────────────────────────────────────────
+        st.markdown("### 🎬 3D Voyage Video")
+        st.caption(
+            "Photoreal 3D playback of the selected programme, driven by the "
+            "stored run. Press ● REC in the player to record the full voyage, "
+            "then convert the downloaded .webm with "
+            "`python renderer/make_video.py webm <file>`."
+        )
+
+        _v3_rank = st.number_input(
+            "Programme rank to animate (1 = best)",
+            1, 50, 1, 1, key='v3_rank',
+            help="Ranked as stored for this run. 1 is the most profitable programme.",
+        )
+
+        _vc1, _vc2, _vc3, _vc4 = st.columns(4)
+        _v3_min  = _vc1.number_input("Min sec / passage", 1.0, 30.0, 4.0, 0.5, key='v3_min')
+        _v3_max  = _vc2.number_input("Max sec / passage", 1.0, 40.0, 6.0, 0.5, key='v3_max')
+        _v3_port = _vc3.number_input("Sec / port call",   0.5, 20.0, 2.0, 0.5, key='v3_port')
+        _v3_hero = _vc4.number_input("Sec / hero call",   1.0, 30.0, 8.0, 0.5, key='v3_hero')
+
+        if st.button("↻ Reload 3D voyage", key='v3_load', use_container_width=True):
+            st.session_state.pop('v3_ready', None)
+        st.session_state['v3_ready'] = True
+
+        if st.session_state.get('v3_ready'):
+            try:
+                from modules.voyage_video import (
+                    ensure_server, write_timeline, viewer_url, estimate_runtime,
+                )
+                _v3_base = ensure_server()
+                # run_id=None always resolves to the newest run holding
+                # programme legs, so the video reflects the latest simulation
+                # whether or not it was run in this session.
+                _v3_rel, _v3_tl = write_timeline(
+                    run_id=None, programme_rank=int(_v3_rank),
+                )
+                _v3_secs = estimate_runtime(
+                    _v3_tl, _v3_min, _v3_max, _v3_port, _v3_hero)
+                _v3_meta = _v3_tl['meta']
+
+                _m1, _m2, _m3, _m4 = st.columns(4)
+                _m1.metric("Runtime", f"{int(_v3_secs // 60)}m{int(_v3_secs % 60):02d}s")
+                _m2.metric("Voyages", _v3_meta['n_voyages'])
+                _m3.metric("Distance", f"{_v3_meta['total_nm']:,.0f} nm")
+                _m4.metric("Vessel", f"{_v3_meta['loa'] or '~'}m LOA")
+
+                if _v3_meta['dropped_ports']:
+                    st.warning(
+                        "These ports have no coordinates, so their calls are "
+                        f"missing from the animation: {', '.join(_v3_meta['dropped_ports'])}"
+                    )
+                if _v3_meta['synthetic_pct'] > 1:
+                    st.warning(
+                        f"{_v3_meta['synthetic_pct']}% of the distance has no sea "
+                        "route and is drawn as a straight line. Rebuild routes with "
+                        "`python data/rebuild_routes_for_programmes.py`."
+                    )
+
+                _v3_url = viewer_url(_v3_rel, _v3_base,
+                                     _v3_min, _v3_max, _v3_port, _v3_hero)
+                st.components.v1.html(
+                    f'<iframe src="{_v3_url}" width="100%" height="700" '
+                    'style="border:1px solid #1e293b;border-radius:8px" '
+                    'allow="autoplay"></iframe>',
+                    height=720, scrolling=False)
+                st.caption(f"Player: {_v3_url}")
+
+            except ValueError as _v3_err:
+                st.info(str(_v3_err))
+            except Exception as _v3_err:
+                st.error(f"Could not start the 3D viewer: {_v3_err}")
 
         # ── Elements AFTER canvas ─────────────────────────────────────────
 
